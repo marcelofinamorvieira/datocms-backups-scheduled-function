@@ -2,6 +2,11 @@
   directory = "netlify/functions"
 
 [[redirects]]
+  from = "/api/datocms/backup-now"
+  to = "/.netlify/functions/backup-now"
+  status = 200
+
+[[redirects]]
   from = "/api/datocms/plugin-health"
   to = "/.netlify/functions/plugin-health"
   status = 200

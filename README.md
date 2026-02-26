@@ -52,10 +52,13 @@ Result payload includes:
 
 ## Environment variables
 
-Use one of:
+Set this for new deployments:
 
 - `DATOCMS_FULLACCESS_API_TOKEN` (preferred)
-- `DATOCMS_FULLACCESS_TOKEN` (legacy fallback)
+
+Backward compatibility is preserved:
+
+- `DATOCMS_FULLACCESS_TOKEN` is still accepted as a legacy fallback
 
 The service reads these in all targets. If neither is available the request fails with:
 
@@ -185,7 +188,8 @@ Cloudflare route: `GET|POST /api/jobs/daily-backup`
 
 Netlify scheduled function:
 
-- no public route, runs on cron schedule through `netlify/functions/dailyBackup/dailyBackup.ts`
+- public on-demand route: `GET|POST /api/datocms/backup-now`
+- scheduled cron function still runs through `netlify/functions/dailyBackup/dailyBackup.ts`
 
 Behavior:
 
@@ -289,7 +293,10 @@ One-click:
 
 Files:
 
-- `netlify.toml` includes template env vars and `/api/datocms/plugin-health` redirect
+- `netlify.toml` includes template env vars and redirects for:
+  - `/api/datocms/plugin-health`
+  - `/api/datocms/backup-now`
+- `netlify/functions/backup-now.ts` wraps shared on-demand backup handler
 - `netlify/functions/plugin-health.ts` wraps shared health handler
 - `netlify/functions/dailyBackup/dailyBackup.ts` cron job
 - `netlify/functions/weeklyBackup/weeklyBackup.ts` cron job

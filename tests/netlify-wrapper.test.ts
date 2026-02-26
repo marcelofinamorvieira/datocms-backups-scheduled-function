@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { handler as backupNowNetlifyHandler } from "../netlify/functions/backup-now";
 import { handler as pluginHealthNetlifyHandler } from "../netlify/functions/plugin-health";
 import {
   BACKUPS_MPI_PING_MESSAGE,
@@ -49,6 +50,19 @@ test("netlify wrapper preserves method validation response", async () => {
   const response = await pluginHealthNetlifyHandler(
     createEvent({
       method: "GET",
+    }),
+  );
+
+  assert.equal(response.statusCode, 405);
+  const payload = JSON.parse(response.body);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.error.code, "METHOD_NOT_ALLOWED");
+});
+
+test("netlify backup-now wrapper preserves method validation response", async () => {
+  const response = await backupNowNetlifyHandler(
+    createEvent({
+      method: "PUT",
     }),
   );
 
