@@ -34,6 +34,7 @@ test("vercel daily route returns expected success payload", async () => {
 
 test("vercel daily route returns a skip payload for cron invocations outside assigned slot", async () => {
   let manualRunnerInvoked = false;
+  let scheduledCadence: string | undefined;
   const handler = createDailyBackupHandler(
     async () => {
       manualRunnerInvoked = true;
@@ -43,16 +44,19 @@ test("vercel daily route returns a skip payload for cron invocations outside ass
         deletedEnvironmentId: null,
       };
     },
-    async () => ({
-      scope: "daily",
-      status: "skipped",
-      schedule: {
-        slotHourUtc: 16,
-        slotWeekdayUtc: null,
-        currentHourUtc: 12,
-        currentWeekdayUtc: 4,
-      },
-    }),
+    async (options) => {
+      scheduledCadence = options?.cadence;
+      return {
+        scope: "daily",
+        status: "skipped",
+        schedule: {
+          slotHourUtc: 16,
+          slotWeekdayUtc: null,
+          currentHourUtc: 12,
+          currentWeekdayUtc: 4,
+        },
+      };
+    },
   );
 
   const response = await invokeVercelStyleHandler(
@@ -71,6 +75,42 @@ test("vercel daily route returns a skip payload for cron invocations outside ass
   assert.equal(payload.ok, true);
   assert.equal(payload.skipped, true);
   assert.equal(manualRunnerInvoked, false);
+  assert.equal(scheduledCadence, "daily");
+});
+
+test("vercel daily GET without cron headers keeps hourly cadence mode", async () => {
+  let scheduledCadence: string | undefined;
+  const handler = createDailyBackupHandler(
+    async () => ({
+      scope: "daily",
+      createdEnvironmentId: "backup-plugin-daily-2026-02-26",
+      deletedEnvironmentId: null,
+    }),
+    async (options) => {
+      scheduledCadence = options?.cadence;
+      return {
+        scope: "daily",
+        status: "skipped",
+        schedule: {
+          slotHourUtc: 16,
+          slotWeekdayUtc: null,
+          currentHourUtc: 12,
+          currentWeekdayUtc: 4,
+        },
+      };
+    },
+  );
+
+  const response = await invokeVercelStyleHandler(
+    handler as unknown as VercelStyleHandler,
+    {
+      method: "GET",
+      body: {},
+    },
+  );
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(scheduledCadence, "hourly");
 });
 
 test("vercel weekly route rejects unsupported methods", async () => {
@@ -92,6 +132,44 @@ test("vercel weekly route rejects unsupported methods", async () => {
   const payload = JSON.parse(response.body);
   assert.equal(payload.ok, false);
   assert.equal(payload.error.code, "METHOD_NOT_ALLOWED");
+});
+
+test("vercel weekly route uses daily cadence mode for cron invocations", async () => {
+  let scheduledCadence: string | undefined;
+  const handler = createWeeklyBackupHandler(
+    async () => ({
+      scope: "weekly",
+      createdEnvironmentId: "backup-plugin-weekly-2026-02-26",
+      deletedEnvironmentId: null,
+    }),
+    async (options) => {
+      scheduledCadence = options?.cadence;
+      return {
+        scope: "weekly",
+        status: "skipped",
+        schedule: {
+          slotHourUtc: 19,
+          slotWeekdayUtc: 4,
+          currentHourUtc: 2,
+          currentWeekdayUtc: 3,
+        },
+      };
+    },
+  );
+
+  const response = await invokeVercelStyleHandler(
+    handler as unknown as VercelStyleHandler,
+    {
+      method: "GET",
+      body: {},
+      headers: {
+        "x-vercel-cron": "1",
+      },
+    },
+  );
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(scheduledCadence, "daily");
 });
 
 test("vercel initialize route returns success payload", async () => {

@@ -43,6 +43,35 @@ test("distributed due check validates daily hour matching", () => {
   );
 });
 
+test("distributed due check supports daily cadence mode for hobby-compatible crons", () => {
+  const dailySchedule = {
+    slotHourUtc: 13,
+    slotWeekdayUtc: null,
+    currentHourUtc: 2,
+    currentWeekdayUtc: 4,
+  };
+  assert.equal(isDistributedScheduleDue("daily", dailySchedule, "daily"), true);
+
+  const weeklySchedule = {
+    slotHourUtc: 19,
+    slotWeekdayUtc: 4,
+    currentHourUtc: 2,
+    currentWeekdayUtc: 4,
+  };
+  assert.equal(isDistributedScheduleDue("weekly", weeklySchedule, "daily"), true);
+  assert.equal(
+    isDistributedScheduleDue(
+      "weekly",
+      {
+        ...weeklySchedule,
+        currentWeekdayUtc: 5,
+      },
+      "daily",
+    ),
+    false,
+  );
+});
+
 test("scheduled daily backup skips outside assigned hour without calling Dato", async () => {
   const apiToken = "test-token";
   const schedule = getDistributedScheduleWindow(

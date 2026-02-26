@@ -29,8 +29,11 @@ type BackupExecutionOptions = {
   apiToken?: string;
 };
 
+export type ScheduledCadence = "hourly" | "daily";
+
 type ScheduledBackupExecutionOptions = BackupExecutionOptions & {
   now?: Date;
+  cadence?: ScheduledCadence;
 };
 
 export type DistributedScheduleWindow = {
@@ -143,7 +146,16 @@ export const getDistributedScheduleWindow = (
 export const isDistributedScheduleDue = (
   scope: BackupScope,
   schedule: DistributedScheduleWindow,
+  cadence: ScheduledCadence = "hourly",
 ): boolean => {
+  if (cadence === "daily") {
+    if (scope === "daily") {
+      return true;
+    }
+
+    return schedule.currentWeekdayUtc === schedule.slotWeekdayUtc;
+  }
+
   if (scope === "daily") {
     return schedule.currentHourUtc === schedule.slotHourUtc;
   }
@@ -200,7 +212,7 @@ const runScheduledScopedBackup = async (
   assignApiTokenToProcessEnv(apiToken);
 
   const schedule = getDistributedScheduleWindow(scope, apiToken, options.now);
-  if (!isDistributedScheduleDue(scope, schedule)) {
+  if (!isDistributedScheduleDue(scope, schedule, options.cadence)) {
     return {
       scope,
       status: "skipped",

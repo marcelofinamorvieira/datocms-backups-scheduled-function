@@ -2,6 +2,7 @@ import {
   MissingApiTokenError,
   runDailyBackup,
   runScheduledDailyBackup,
+  type ScheduledCadence,
   type ScheduledScopedBackupResult,
   type ScopedBackupResult,
 } from "../../services/backupService";
@@ -123,8 +124,9 @@ const createScheduledSkipPayload = (result: ScheduledScopedBackupResult) => ({
 
 export const createDailyBackupHandler = (
   runBackup: () => Promise<ScopedBackupResult> = () => runDailyBackup(),
-  runScheduledBackup: () => Promise<ScheduledScopedBackupResult> = () =>
-    runScheduledDailyBackup(),
+  runScheduledBackup: (options?: { cadence?: ScheduledCadence }) => Promise<ScheduledScopedBackupResult> = (
+    options,
+  ) => runScheduledDailyBackup(options),
 ) => {
   return async (req: VercelRequest, res: VercelResponse) => {
     setCorsHeaders(res);
@@ -142,12 +144,14 @@ export const createDailyBackupHandler = (
     }
 
     try {
+      const isCronInvocation = isVercelCronInvocation(req);
       const shouldUseDistributedSchedule =
-        (req.method === "GET" || isVercelCronInvocation(req)) &&
-        !isForceRunRequested(req);
+        (req.method === "GET" || isCronInvocation) && !isForceRunRequested(req);
 
       if (shouldUseDistributedSchedule) {
-        const scheduledResult = await runScheduledBackup();
+        const scheduledResult = await runScheduledBackup({
+          cadence: isCronInvocation ? "daily" : "hourly",
+        });
         if (scheduledResult.status === "skipped") {
           res.status(200).json(createScheduledSkipPayload(scheduledResult));
           return;

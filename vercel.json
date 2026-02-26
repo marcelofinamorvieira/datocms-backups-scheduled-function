@@ -2,11 +2,11 @@
   "crons": [
     {
       "path": "/api/jobs/daily-backup",
-      "schedule": "5 * * * *"
+      "schedule": "5 2 * * *"
     },
     {
       "path": "/api/jobs/weekly-backup",
-      "schedule": "35 * * * *"
+      "schedule": "35 2 * * *"
     }
   ]
 }

@@ -66,28 +66,30 @@ The service reads these in all targets. If neither is available the request fail
 
 ### Cron expressions
 
-Common cron values are:
+Current cron defaults are platform-specific:
 
-- `5 * * * *` (minute 5, every hour UTC)
-- `35 * * * *` (minute 35, every hour UTC)
+- Netlify + Cloudflare:
+  - `5 * * * *` (minute 5, every hour UTC)
+  - `35 * * * *` (minute 35, every hour UTC)
+- Vercel:
+  - `5 2 * * *` (daily at 02:05 UTC)
+  - `35 2 * * *` (daily at 02:35 UTC)
 
-Used by:
-
-- Netlify scheduled functions via platform schedule support
-- Vercel cron config (`vercel.json`)
-- Cloudflare crons (`wrangler.toml`)
+Vercel values are intentionally once per day so the project always fits Vercel Hobby cron limits.
 
 ### Deterministic distributed slots
 
-To avoid all projects running backups at the same minute:
+To avoid all projects running backups at the same time:
 
-- daily scope gets one UTC hour per project from a deterministic hash of
-  `scope + token + constant-salt`
-- weekly scope gets one UTC weekday + hour per project from the same deterministic hash
+- hourly cadence mode:
+  - daily scope gets one UTC hour per project from a deterministic hash of
+    `scope + token + constant-salt`
+  - weekly scope gets one UTC weekday + hour per project from the same deterministic hash
+- daily cadence mode (used for Vercel cron):
+  - daily scope always executes when invoked
+  - weekly scope executes only on the assigned UTC weekday
 - if current time is outside the assigned slot, the run is skipped as a safe no-op
 - if inside the assigned slot, backup executes
-
-This means backups are effectively spread across the week/hour grid.
 
 Response example on skip:
 
@@ -187,8 +189,11 @@ Netlify scheduled function:
 
 Behavior:
 
-- Vercel: `GET` and Vercel cron invocations use distributed scheduling unless forced
-- Vercel: `POST` is manual unless force flag is set
+- Vercel cron invocations use daily cadence:
+  - daily route executes on each cron trigger
+  - weekly route executes only on its assigned UTC weekday
+- Vercel `GET` without cron headers uses hourly distributed scheduling unless forced
+- Vercel `POST` is manual unless force flag is set
 - Cloudflare direct route always executes immediate backup
 
 Manual success:
@@ -303,6 +308,9 @@ Files:
 - `api/jobs/weekly-backup.ts`
 - `api/jobs/initialize.ts`
 - `vercel.json` (cron schedule)
+- Vercel cron values are daily to remain Hobby-compatible:
+  - `5 2 * * *` for daily endpoint
+  - `35 2 * * *` for weekly endpoint
 
 ### Cloudflare Workers
 
@@ -350,6 +358,9 @@ Notes:
 - `plugin-health` requires exact contract values from `utils/healthContract.ts`.
 - `plugin.environment` must be a non-empty string.
 - `runScheduled*` logic is UTC-based (`getUTCHours` / `getUTCDay`).
+- `runScheduled*` supports two cadence modes:
+  - `hourly` (daily uses hour slot, weekly uses weekday+hour slot)
+  - `daily` (daily always due, weekly uses weekday slot)
 - Weekly scheduling `slotWeekdayUtc` is only present for weekly scope.
 - If `runScheduled*` runs outside the assigned slot, it returns structured skip response with `200`.
 
