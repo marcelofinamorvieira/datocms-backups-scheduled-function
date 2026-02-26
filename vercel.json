@@ -1,4 +1,26 @@
 {
+  "rewrites": [
+    {
+      "source": "/api/datocms/backup-now",
+      "destination": "/api/jobs/daily-backup"
+    },
+    {
+      "source": "/.netlify/functions/dailyBackup",
+      "destination": "/api/jobs/daily-backup"
+    },
+    {
+      "source": "/.netlify/functions/weeklyBackup",
+      "destination": "/api/jobs/weekly-backup"
+    },
+    {
+      "source": "/.netlify/functions/initialization",
+      "destination": "/api/jobs/initialize"
+    },
+    {
+      "source": "/.netlify/functions/plugin-health",
+      "destination": "/api/datocms/plugin-health"
+    }
+  ],
   "crons": [
     {
       "path": "/api/jobs/daily-backup",
