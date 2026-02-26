@@ -1,31 +1,86 @@
 import { schedule } from "@netlify/functions";
-import { buildClient } from "@datocms/cma-client-node";
+import {
+  runScheduledWeeklyBackup,
+  type ScheduledScopedBackupResult,
+  type ScopedBackupResult,
+} from "../../../services/backupService";
 
-export const handler = schedule("@weekly", async (event) => {
-  const client = buildClient({
-    apiToken: process.env.DATOCMS_FULLACCESS_TOKEN as string,
-  });
+type NetlifyResponse = {
+  statusCode: number;
+  headers?: Record<string, string>;
+  body?: string;
+};
 
-  const environments = await client.environments.list();
+export const WEEKLY_NETLIFY_CRON_SCHEDULE = "35 * * * *";
 
-  const mainEnvironment = environments.find(
-    (environment) => environment.meta.primary
-  );
+const createSuccessResponse = (result: ScopedBackupResult): NetlifyResponse => ({
+  statusCode: 200,
+  headers: {
+    "Access-Control-Allow-Origin": "*",
+  },
+  body: JSON.stringify({
+    ok: true,
+    result,
+  }),
+});
 
-  const previousUnusedWeeklyBackup = environments.find(
-    (environment) =>
-      environment.id.match("backup-plugin-weekly") && !environment.meta.primary
-  );
+const createSkipResponse = (result: ScheduledScopedBackupResult): NetlifyResponse => ({
+  statusCode: 200,
+  headers: {
+    "Access-Control-Allow-Origin": "*",
+  },
+  body: JSON.stringify({
+    ok: true,
+    skipped: true,
+    reason: "NOT_DUE_IN_DISTRIBUTED_SLOT",
+    scope: result.scope,
+    schedule: result.schedule,
+  }),
+});
 
-  if (previousUnusedWeeklyBackup) {
-    await client.environments.destroy(previousUnusedWeeklyBackup.id);
+const createErrorResponse = (error: unknown): NetlifyResponse => ({
+  statusCode: 500,
+  headers: {
+    "Access-Control-Allow-Origin": "*",
+    "Content-Type": "application/json; charset=utf-8",
+  },
+  body: JSON.stringify({
+    ok: false,
+    error: {
+      code: "INTERNAL_SERVER_ERROR",
+      message: error instanceof Error ? error.message : "Unknown error",
+      details: {},
+    },
+  }),
+});
+
+const isScheduledBackupResult = (
+  value: ScopedBackupResult | ScheduledScopedBackupResult,
+): value is ScheduledScopedBackupResult => {
+  return Boolean(value) && typeof value === "object" && "status" in value;
+};
+
+export const runWeeklyBackupJob = async (
+  runJob: () => Promise<ScopedBackupResult | ScheduledScopedBackupResult> = () =>
+    runScheduledWeeklyBackup(),
+): Promise<NetlifyResponse> => {
+  try {
+    const result = await runJob();
+
+    if (isScheduledBackupResult(result)) {
+      if (result.status === "skipped") {
+        return createSkipResponse(result);
+      }
+
+      return createSuccessResponse(result.result);
+    }
+
+    return createSuccessResponse(result);
+  } catch (error) {
+    return createErrorResponse(error);
   }
+};
 
-  await client.environments.fork(mainEnvironment!.id, {
-    id: `backup-plugin-weekly-${new Date().toISOString().split("T")[0]}`,
-  });
-
-  return {
-    statusCode: 200,
-  };
+export const handler = schedule(WEEKLY_NETLIFY_CRON_SCHEDULE, async () => {
+  return runWeeklyBackupJob();
 });
