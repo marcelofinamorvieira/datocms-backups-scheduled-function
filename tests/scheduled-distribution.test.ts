@@ -1,152 +1,147 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  computeNextBackupAtForScope,
-  getDistributedScheduleWindow,
-  getLatestBackupCreatedAtForScope,
-  isDistributedScheduleDue,
-  runScheduledDailyBackup,
-  runScheduledWeeklyBackup,
+  getNextDueDateForCadence,
+  isCadenceDue,
+  normalizeBackupSchedule,
+  toTimezoneLocalDateKey,
 } from "../services/backupService";
 
-test("distributed schedule slots are deterministic and within expected UTC ranges", () => {
-  const apiToken = "test-token";
-  const first = getDistributedScheduleWindow(
-    "weekly",
-    apiToken,
-    new Date("2026-02-26T00:00:00.000Z"),
-  );
-  const second = getDistributedScheduleWindow(
-    "weekly",
-    apiToken,
-    new Date("2026-06-26T00:00:00.000Z"),
-  );
-
-  assert.equal(first.slotHourUtc, second.slotHourUtc);
-  assert.equal(first.slotWeekdayUtc, second.slotWeekdayUtc);
-  assert.ok(first.slotHourUtc >= 0 && first.slotHourUtc <= 23);
-  assert.ok(first.slotWeekdayUtc !== null && first.slotWeekdayUtc >= 0 && first.slotWeekdayUtc <= 6);
-});
-
-test("distributed due check validates daily hour matching", () => {
-  const schedule = {
-    slotHourUtc: 13,
-    slotWeekdayUtc: null,
-    currentHourUtc: 13,
-    currentWeekdayUtc: 4,
-  };
-  assert.equal(isDistributedScheduleDue("daily", schedule), true);
+test("daily cadence is due on current local date unless it already ran today", () => {
+  const anchor = "2026-02-20";
   assert.equal(
-    isDistributedScheduleDue("daily", {
-      ...schedule,
-      currentHourUtc: 12,
+    isCadenceDue({
+      cadence: "daily",
+      anchorLocalDate: anchor,
+      currentLocalDate: "2026-02-27",
+      lastRunLocalDate: undefined,
+    }),
+    true,
+  );
+
+  assert.equal(
+    isCadenceDue({
+      cadence: "daily",
+      anchorLocalDate: anchor,
+      currentLocalDate: "2026-02-27",
+      lastRunLocalDate: "2026-02-27",
     }),
     false,
   );
 });
 
-test("distributed due check supports daily cadence mode for hobby-compatible crons", () => {
-  const dailySchedule = {
-    slotHourUtc: 13,
-    slotWeekdayUtc: null,
-    currentHourUtc: 2,
-    currentWeekdayUtc: 4,
-  };
-  assert.equal(isDistributedScheduleDue("daily", dailySchedule, "daily"), true);
-
-  const weeklySchedule = {
-    slotHourUtc: 19,
-    slotWeekdayUtc: 4,
-    currentHourUtc: 2,
-    currentWeekdayUtc: 4,
-  };
-  assert.equal(isDistributedScheduleDue("weekly", weeklySchedule, "daily"), true);
+test("weekly cadence uses anchor day and 7-day intervals", () => {
   assert.equal(
-    isDistributedScheduleDue(
-      "weekly",
-      {
-        ...weeklySchedule,
-        currentWeekdayUtc: 5,
-      },
-      "daily",
-    ),
+    isCadenceDue({
+      cadence: "weekly",
+      anchorLocalDate: "2026-02-26",
+      currentLocalDate: "2026-03-05",
+      lastRunLocalDate: undefined,
+    }),
+    true,
+  );
+
+  assert.equal(
+    isCadenceDue({
+      cadence: "weekly",
+      anchorLocalDate: "2026-02-26",
+      currentLocalDate: "2026-03-04",
+      lastRunLocalDate: undefined,
+    }),
     false,
   );
 });
 
-test("scheduled daily backup skips outside assigned hour without calling Dato", async () => {
-  const apiToken = "test-token";
-  const schedule = getDistributedScheduleWindow(
-    "daily",
-    apiToken,
-    new Date("2026-02-26T00:00:00.000Z"),
+test("biweekly cadence stays anchored across month/year boundaries", () => {
+  assert.equal(
+    isCadenceDue({
+      cadence: "biweekly",
+      anchorLocalDate: "2025-12-25",
+      currentLocalDate: "2026-01-08",
+      lastRunLocalDate: undefined,
+    }),
+    true,
   );
-  const outsideAssignedHour = new Date("2026-02-26T00:00:00.000Z");
-  outsideAssignedHour.setUTCHours((schedule.slotHourUtc + 1) % 24, 0, 0, 0);
 
-  const result = await runScheduledDailyBackup({
-    apiToken,
-    now: outsideAssignedHour,
-  });
-
-  assert.equal(result.status, "skipped");
-  assert.equal(result.scope, "daily");
-});
-
-test("scheduled weekly backup skips outside assigned weekday/hour without calling Dato", async () => {
-  const apiToken = "test-token";
-  const schedule = getDistributedScheduleWindow(
-    "weekly",
-    apiToken,
-    new Date("2026-02-26T00:00:00.000Z"),
+  assert.equal(
+    isCadenceDue({
+      cadence: "biweekly",
+      anchorLocalDate: "2025-12-25",
+      currentLocalDate: "2026-01-15",
+      lastRunLocalDate: undefined,
+    }),
+    false,
   );
-  const outsideAssignedHour = new Date("2026-02-26T00:00:00.000Z");
-  outsideAssignedHour.setUTCHours((schedule.slotHourUtc + 1) % 24, 0, 0, 0);
-
-  const result = await runScheduledWeeklyBackup({
-    apiToken,
-    now: outsideAssignedHour,
-  });
-
-  assert.equal(result.status, "skipped");
-  assert.equal(result.scope, "weekly");
 });
 
-test("next due computation supports hourly cadence", () => {
-  const next = computeNextBackupAtForScope({
-    scope: "daily",
-    cadence: "hourly",
-    provider: "netlify",
-    now: new Date("2026-02-26T12:00:00.000Z"),
-    schedule: {
-      slotHourUtc: 13,
-      slotWeekdayUtc: null,
-      currentHourUtc: 12,
-      currentWeekdayUtc: 4,
+test("monthly cadence clamps day 31 to shorter months", () => {
+  assert.equal(
+    getNextDueDateForCadence({
+      cadence: "monthly",
+      anchorLocalDate: "2026-01-31",
+      currentLocalDate: "2026-02-01",
+      lastRunLocalDate: undefined,
+    }),
+    "2026-02-28",
+  );
+
+  assert.equal(
+    getNextDueDateForCadence({
+      cadence: "monthly",
+      anchorLocalDate: "2024-01-31",
+      currentLocalDate: "2024-02-01",
+      lastRunLocalDate: undefined,
+    }),
+    "2024-02-29",
+  );
+});
+
+test("next due date moves to the next interval after current-day execution", () => {
+  assert.equal(
+    getNextDueDateForCadence({
+      cadence: "daily",
+      anchorLocalDate: "2026-02-26",
+      currentLocalDate: "2026-02-26",
+      lastRunLocalDate: "2026-02-26",
+    }),
+    "2026-02-27",
+  );
+
+  assert.equal(
+    getNextDueDateForCadence({
+      cadence: "weekly",
+      anchorLocalDate: "2026-02-26",
+      currentLocalDate: "2026-03-05",
+      lastRunLocalDate: "2026-03-05",
+    }),
+    "2026-03-12",
+  );
+});
+
+test("schedule normalization falls back to daily+weekly and valid timezone", () => {
+  const normalized = normalizeBackupSchedule({
+    value: {
+      version: 99,
+      enabledCadences: [],
+      timezone: "Invalid/Zone",
+      lambdalessTime: "99:99",
     },
+    timezoneFallback: "America/New_York",
+    now: new Date("2026-02-27T10:00:00.000Z"),
   });
 
-  assert.equal(next, "2026-02-26T13:05:00.000Z");
+  assert.equal(normalized.config.version, 1);
+  assert.deepEqual(normalized.config.enabledCadences, ["daily", "weekly"]);
+  assert.equal(normalized.config.timezone, "America/New_York");
+  assert.equal(normalized.config.lambdalessTime, "00:00");
+  assert.equal(normalized.requiresMigration, true);
 });
 
-test("next due computation supports daily cadence", () => {
-  const next = computeNextBackupAtForScope({
-    scope: "weekly",
-    cadence: "daily",
-    provider: "vercel",
-    now: new Date("2026-02-26T12:00:00.000Z"),
-    schedule: {
-      slotHourUtc: 17,
-      slotWeekdayUtc: 5,
-      currentHourUtc: 12,
-      currentWeekdayUtc: 4,
-    },
-  });
-
-  assert.equal(next, "2026-02-27T02:35:00.000Z");
-});
-
-test("latest backup lookup returns null when no managed environments exist", () => {
-  const latest = getLatestBackupCreatedAtForScope([], "daily");
-  assert.equal(latest, null);
+test("timezone local date key tracks project timezone date boundaries", () => {
+  const utcDate = new Date("2026-02-27T02:30:00.000Z");
+  assert.equal(toTimezoneLocalDateKey(utcDate, "UTC"), "2026-02-27");
+  assert.equal(
+    toTimezoneLocalDateKey(utcDate, "America/Los_Angeles"),
+    "2026-02-26",
+  );
 });

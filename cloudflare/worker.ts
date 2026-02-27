@@ -1,11 +1,12 @@
 import {
   runDailyBackup,
-  runScheduledDailyBackup,
-  runScheduledWeeklyBackup,
+  runScheduledBackups,
   runWeeklyBackup,
 } from "../services/backupService";
 import pluginHealthHandler from "../api/datocms/plugin-health";
 import backupStatusHandler from "../api/datocms/backup-status";
+import schedulerDisconnectHandler from "../api/datocms/scheduler-disconnect";
+import backupNowHandler from "../api/datocms/backup-now";
 import {
   buildErrorEnvelope,
   buildJsonResponse,
@@ -13,8 +14,7 @@ import {
   invokeVercelStyleHandler,
 } from "../utils/platformAdapters";
 
-const DAILY_CRON_SCHEDULE = "5 * * * *";
-const WEEKLY_CRON_SCHEDULE = "35 * * * *";
+const DAILY_CRON_SCHEDULE = "5 2 * * *";
 
 type CloudflareBindings = {
   DATOCMS_FULLACCESS_API_TOKEN?: string;
@@ -59,8 +59,10 @@ const resolveApiTokenFromBindings = (env: CloudflareBindings) =>
 type CloudflareWorkerDependencies = {
   runDaily: (options: { apiToken?: string }) => Promise<unknown>;
   runWeekly: (options: { apiToken?: string }) => Promise<unknown>;
-  runScheduledDaily: (options: { apiToken?: string }) => Promise<unknown>;
-  runScheduledWeekly: (options: { apiToken?: string }) => Promise<unknown>;
+  runScheduled: (options: {
+    apiToken?: string;
+    providerHint?: "cloudflare";
+  }) => Promise<unknown>;
 };
 
 const createCloudflareWorker = (
@@ -72,16 +74,10 @@ const createCloudflareWorker = (
   const runWeekly =
     dependencies.runWeekly ??
     ((options: { apiToken?: string }) => runWeeklyBackup(options));
-  const runScheduledDaily =
-    dependencies.runScheduledDaily ??
-    (dependencies.runDaily
-      ? dependencies.runDaily
-      : (options: { apiToken?: string }) => runScheduledDailyBackup(options));
-  const runScheduledWeekly =
-    dependencies.runScheduledWeekly ??
-    (dependencies.runWeekly
-      ? dependencies.runWeekly
-      : (options: { apiToken?: string }) => runScheduledWeeklyBackup(options));
+  const runScheduled =
+    dependencies.runScheduled ??
+    ((options: { apiToken?: string; providerHint?: "cloudflare" }) =>
+      runScheduledBackups(options));
 
   return {
     async fetch(request: Request, env: CloudflareBindings): Promise<Response> {
@@ -119,6 +115,57 @@ const createCloudflareWorker = (
           body,
         });
         return buildResponseFromCapturedPayload(response);
+      }
+
+      if (pathname === "/api/datocms/scheduler-disconnect") {
+        const body = await parseRequestBody(request);
+        const response = await invokeVercelStyleHandler(
+          schedulerDisconnectHandler,
+          {
+            method: request.method,
+            body,
+          },
+        );
+        return buildResponseFromCapturedPayload(response);
+      }
+
+      if (pathname === "/api/datocms/backup-now") {
+        const body = await parseRequestBody(request);
+        const response = await invokeVercelStyleHandler(backupNowHandler, {
+          method: request.method,
+          body,
+        });
+        return buildResponseFromCapturedPayload(response);
+      }
+
+      if (pathname === "/api/jobs/scheduled-backups") {
+        try {
+          const result = await runScheduled({
+            apiToken: resolveApiTokenFromBindings(env),
+            providerHint: "cloudflare",
+          });
+          return new Response(JSON.stringify({ ok: true, result }), {
+            status: 200,
+            headers: {
+              "Access-Control-Allow-Origin": "*",
+              "Content-Type": "application/json; charset=utf-8",
+            },
+          });
+        } catch (error) {
+          const payload = buildErrorEnvelope(
+            "INTERNAL_SERVER_ERROR",
+            error instanceof Error
+              ? error.message
+              : "An unexpected internal error occurred",
+          );
+          return new Response(JSON.stringify(payload), {
+            status: 500,
+            headers: {
+              "Access-Control-Allow-Origin": "*",
+              "Content-Type": "application/json; charset=utf-8",
+            },
+          });
+        }
       }
 
       if (pathname === "/api/jobs/daily-backup") {
@@ -195,17 +242,16 @@ const createCloudflareWorker = (
       env: CloudflareBindings,
       context: ScheduledContext,
     ) {
-      const apiToken = resolveApiTokenFromBindings(env);
-
-      if (controller.cron === DAILY_CRON_SCHEDULE) {
-        context.waitUntil(runScheduledDaily({ apiToken }));
+      if (controller.cron !== DAILY_CRON_SCHEDULE) {
         return;
       }
 
-      if (controller.cron === WEEKLY_CRON_SCHEDULE) {
-        context.waitUntil(runScheduledWeekly({ apiToken }));
-        return;
-      }
+      context.waitUntil(
+        runScheduled({
+          apiToken: resolveApiTokenFromBindings(env),
+          providerHint: "cloudflare",
+        }),
+      );
     },
   };
 };
@@ -213,7 +259,6 @@ const createCloudflareWorker = (
 export {
   createCloudflareWorker,
   DAILY_CRON_SCHEDULE,
-  WEEKLY_CRON_SCHEDULE,
 };
 
 export default createCloudflareWorker();

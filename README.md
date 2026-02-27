@@ -200,6 +200,47 @@ Request:
 }
 ```
 
+### 2b) Scheduler disconnect
+
+`POST /api/datocms/scheduler-disconnect`
+
+Request:
+
+```json
+{
+  "event_type": "scheduler_disconnect_request",
+  "mpi": {
+    "message": "DATOCMS_AUTOMATIC_BACKUPS_PLUGIN_SCHEDULER_DISCONNECT",
+    "version": "2026-02-26"
+  },
+  "plugin": {
+    "name": "datocms-plugin-automatic-environment-backups",
+    "environment": "main"
+  }
+}
+```
+
+Success:
+
+```json
+{
+  "ok": true,
+  "mpi": {
+    "message": "DATOCMS_AUTOMATIC_BACKUPS_LAMBDA_SCHEDULER_DISCONNECTED",
+    "version": "2026-02-26"
+  },
+  "service": "datocms-backups-scheduled-function",
+  "status": "ready",
+  "scheduler": {
+    "enabled": false,
+    "disconnectedAt": "2026-02-27T15:00:00.000Z"
+  },
+  "plugin": {
+    "id": "PLUGIN_ID"
+  }
+}
+```
+
 Success:
 
 ```json
@@ -252,6 +293,9 @@ Behavior:
 - Vercel `GET` without cron headers uses hourly distributed scheduling unless forced
 - Vercel `POST` is manual unless force flag is set
 - Cloudflare direct route always executes immediate backup
+- Scheduled skip reasons:
+  - `NOT_DUE_IN_DISTRIBUTED_SLOT`
+  - `SCHEDULER_DISABLED`
 
 Manual success:
 
@@ -350,9 +394,11 @@ Files:
   - `/api/datocms/plugin-health`
   - `/api/datocms/backup-status`
   - `/api/datocms/backup-now`
+  - `/api/datocms/scheduler-disconnect`
 - `netlify/functions/backup-now.ts` wraps shared on-demand backup handler
 - `netlify/functions/plugin-health.ts` wraps shared health handler
 - `netlify/functions/backup-status.ts` wraps shared status handler
+- `netlify/functions/scheduler-disconnect.ts` wraps shared scheduler disconnect handler
 - `netlify/functions/dailyBackup/dailyBackup.ts` cron job
 - `netlify/functions/weeklyBackup/weeklyBackup.ts` cron job
 - `netlify/functions/initialization/initialization.ts` legacy initialization handler
@@ -367,6 +413,7 @@ Files:
 
 - `api/datocms/plugin-health.ts`
 - `api/datocms/backup-status.ts`
+- `api/datocms/scheduler-disconnect.ts`
 - `api/jobs/daily-backup.ts`
 - `api/jobs/weekly-backup.ts`
 - `api/jobs/initialize.ts`
@@ -381,6 +428,7 @@ Files:
 - Route mapping:
   - `POST /api/datocms/plugin-health`
   - `POST /api/datocms/backup-status`
+  - `POST /api/datocms/scheduler-disconnect`
   - `GET|POST /api/jobs/daily-backup`
   - `GET|POST /api/jobs/weekly-backup`
 - Cron schedule in `wrangler.toml`:
@@ -427,6 +475,7 @@ Notes:
   - `daily` (daily always due, weekly uses weekday slot)
 - Weekly scheduling `slotWeekdayUtc` is only present for weekly scope.
 - If `runScheduled*` runs outside the assigned slot, it returns structured skip response with `200`.
+- If the plugin is disconnected, scheduled runs return skip reason `SCHEDULER_DISABLED` with `200`.
 
 ## Compatibility
 

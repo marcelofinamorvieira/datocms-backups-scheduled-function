@@ -32,32 +32,16 @@ test("vercel daily route returns expected success payload", async () => {
   assert.equal(payload.result.scope, "daily");
 });
 
-test("vercel daily route returns a skip payload for cron invocations outside assigned slot", async () => {
-  let manualRunnerInvoked = false;
-  let scheduledCadence: string | undefined;
-  const handler = createDailyBackupHandler(
-    async () => {
-      manualRunnerInvoked = true;
-      return {
-        scope: "daily",
-        createdEnvironmentId: "backup-plugin-daily-2026-02-26",
-        deletedEnvironmentId: null,
-      };
-    },
-    async (options) => {
-      scheduledCadence = options?.cadence;
-      return {
-        scope: "daily",
-        status: "skipped",
-        schedule: {
-          slotHourUtc: 16,
-          slotWeekdayUtc: null,
-          currentHourUtc: 12,
-          currentWeekdayUtc: 4,
-        },
-      };
-    },
-  );
+test("vercel daily GET route executes compatibility backup handler", async () => {
+  let called = false;
+  const handler = createDailyBackupHandler(async () => {
+    called = true;
+    return {
+      scope: "daily",
+      createdEnvironmentId: "backup-plugin-daily-2026-02-26",
+      deletedEnvironmentId: null,
+    };
+  });
 
   const response = await invokeVercelStyleHandler(
     handler as unknown as VercelStyleHandler,
@@ -73,44 +57,7 @@ test("vercel daily route returns a skip payload for cron invocations outside ass
   assert.equal(response.statusCode, 200);
   const payload = JSON.parse(response.body);
   assert.equal(payload.ok, true);
-  assert.equal(payload.skipped, true);
-  assert.equal(manualRunnerInvoked, false);
-  assert.equal(scheduledCadence, "daily");
-});
-
-test("vercel daily GET without cron headers keeps hourly cadence mode", async () => {
-  let scheduledCadence: string | undefined;
-  const handler = createDailyBackupHandler(
-    async () => ({
-      scope: "daily",
-      createdEnvironmentId: "backup-plugin-daily-2026-02-26",
-      deletedEnvironmentId: null,
-    }),
-    async (options) => {
-      scheduledCadence = options?.cadence;
-      return {
-        scope: "daily",
-        status: "skipped",
-        schedule: {
-          slotHourUtc: 16,
-          slotWeekdayUtc: null,
-          currentHourUtc: 12,
-          currentWeekdayUtc: 4,
-        },
-      };
-    },
-  );
-
-  const response = await invokeVercelStyleHandler(
-    handler as unknown as VercelStyleHandler,
-    {
-      method: "GET",
-      body: {},
-    },
-  );
-
-  assert.equal(response.statusCode, 200);
-  assert.equal(scheduledCadence, "hourly");
+  assert.equal(called, true);
 });
 
 test("vercel weekly route rejects unsupported methods", async () => {
@@ -134,28 +81,16 @@ test("vercel weekly route rejects unsupported methods", async () => {
   assert.equal(payload.error.code, "METHOD_NOT_ALLOWED");
 });
 
-test("vercel weekly route uses daily cadence mode for cron invocations", async () => {
-  let scheduledCadence: string | undefined;
-  const handler = createWeeklyBackupHandler(
-    async () => ({
+test("vercel weekly GET route executes compatibility backup handler", async () => {
+  let called = false;
+  const handler = createWeeklyBackupHandler(async () => {
+    called = true;
+    return {
       scope: "weekly",
       createdEnvironmentId: "backup-plugin-weekly-2026-02-26",
       deletedEnvironmentId: null,
-    }),
-    async (options) => {
-      scheduledCadence = options?.cadence;
-      return {
-        scope: "weekly",
-        status: "skipped",
-        schedule: {
-          slotHourUtc: 19,
-          slotWeekdayUtc: 4,
-          currentHourUtc: 2,
-          currentWeekdayUtc: 3,
-        },
-      };
-    },
-  );
+    };
+  });
 
   const response = await invokeVercelStyleHandler(
     handler as unknown as VercelStyleHandler,
@@ -169,7 +104,9 @@ test("vercel weekly route uses daily cadence mode for cron invocations", async (
   );
 
   assert.equal(response.statusCode, 200);
-  assert.equal(scheduledCadence, "daily");
+  const payload = JSON.parse(response.body);
+  assert.equal(payload.ok, true);
+  assert.equal(called, true);
 });
 
 test("vercel initialize route returns success payload", async () => {

@@ -2,11 +2,15 @@
   "rewrites": [
     {
       "source": "/api/datocms/backup-now",
-      "destination": "/api/jobs/daily-backup"
+      "destination": "/api/datocms/backup-now"
     },
     {
       "source": "/api/datocms/backup-status",
       "destination": "/api/datocms/backup-status"
+    },
+    {
+      "source": "/api/datocms/scheduler-disconnect",
+      "destination": "/api/datocms/scheduler-disconnect"
     },
     {
       "source": "/.netlify/functions/dailyBackup",
@@ -27,16 +31,16 @@
     {
       "source": "/.netlify/functions/backup-status",
       "destination": "/api/datocms/backup-status"
+    },
+    {
+      "source": "/.netlify/functions/scheduler-disconnect",
+      "destination": "/api/datocms/scheduler-disconnect"
     }
   ],
   "crons": [
     {
-      "path": "/api/jobs/daily-backup",
+      "path": "/api/jobs/scheduled-backups",
       "schedule": "5 2 * * *"
-    },
-    {
-      "path": "/api/jobs/weekly-backup",
-      "schedule": "35 2 * * *"
     }
   ]
 }

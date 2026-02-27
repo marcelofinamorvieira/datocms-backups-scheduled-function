@@ -1,7 +1,6 @@
-import { schedule } from "@netlify/functions";
+import { Handler } from "@netlify/functions";
 import {
-  runScheduledDailyBackup,
-  type ScheduledScopedBackupResult,
+  runDailyBackup,
   type ScopedBackupResult,
 } from "../../../services/backupService";
 
@@ -11,37 +10,25 @@ type NetlifyResponse = {
   body?: string;
 };
 
-export const DAILY_NETLIFY_CRON_SCHEDULE = "5 * * * *";
+const BASE_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET,OPTIONS,POST",
+  "Access-Control-Allow-Headers": "*",
+};
 
 const createSuccessResponse = (result: ScopedBackupResult): NetlifyResponse => ({
   statusCode: 200,
-  headers: {
-    "Access-Control-Allow-Origin": "*",
-  },
+  headers: BASE_HEADERS,
   body: JSON.stringify({
     ok: true,
     result,
   }),
 });
 
-const createSkipResponse = (result: ScheduledScopedBackupResult): NetlifyResponse => ({
-  statusCode: 200,
-  headers: {
-    "Access-Control-Allow-Origin": "*",
-  },
-  body: JSON.stringify({
-    ok: true,
-    skipped: true,
-    reason: "NOT_DUE_IN_DISTRIBUTED_SLOT",
-    scope: result.scope,
-    schedule: result.schedule,
-  }),
-});
-
 const createErrorResponse = (error: unknown): NetlifyResponse => ({
   statusCode: 500,
   headers: {
-    "Access-Control-Allow-Origin": "*",
+    ...BASE_HEADERS,
     "Content-Type": "application/json; charset=utf-8",
   },
   body: JSON.stringify({
@@ -54,33 +41,44 @@ const createErrorResponse = (error: unknown): NetlifyResponse => ({
   }),
 });
 
-const isScheduledBackupResult = (
-  value: ScopedBackupResult | ScheduledScopedBackupResult,
-): value is ScheduledScopedBackupResult => {
-  return Boolean(value) && typeof value === "object" && "status" in value;
-};
+const createMethodNotAllowedResponse = (): NetlifyResponse => ({
+  statusCode: 405,
+  headers: {
+    ...BASE_HEADERS,
+    "Content-Type": "application/json; charset=utf-8",
+  },
+  body: JSON.stringify({
+    ok: false,
+    error: {
+      code: "METHOD_NOT_ALLOWED",
+      message: "Only GET, POST and OPTIONS are supported.",
+      details: {},
+    },
+  }),
+});
 
 export const runDailyBackupJob = async (
-  runJob: () => Promise<ScopedBackupResult | ScheduledScopedBackupResult> = () =>
-    runScheduledDailyBackup(),
+  runJob: () => Promise<ScopedBackupResult> = () => runDailyBackup(),
 ): Promise<NetlifyResponse> => {
   try {
     const result = await runJob();
-
-    if (isScheduledBackupResult(result)) {
-      if (result.status === "skipped") {
-        return createSkipResponse(result);
-      }
-
-      return createSuccessResponse(result.result);
-    }
-
     return createSuccessResponse(result);
   } catch (error) {
     return createErrorResponse(error);
   }
 };
 
-export const handler = schedule(DAILY_NETLIFY_CRON_SCHEDULE, async () => {
+export const handler: Handler = async (event) => {
+  if (event.httpMethod === "OPTIONS") {
+    return {
+      statusCode: 204,
+      headers: BASE_HEADERS,
+    };
+  }
+
+  if (event.httpMethod !== "GET" && event.httpMethod !== "POST") {
+    return createMethodNotAllowedResponse();
+  }
+
   return runDailyBackupJob();
-});
+};

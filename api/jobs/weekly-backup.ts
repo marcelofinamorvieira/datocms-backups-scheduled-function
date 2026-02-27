@@ -1,9 +1,6 @@
 import {
   MissingApiTokenError,
   runWeeklyBackup,
-  runScheduledWeeklyBackup,
-  type ScheduledCadence,
-  type ScheduledScopedBackupResult,
   type ScopedBackupResult,
 } from "../../services/backupService";
 import type { VercelRequest, VercelResponse } from "../../types/vercel";
@@ -26,107 +23,8 @@ const createErrorPayload = (code: string, message: string) => ({
   },
 });
 
-const getHeaderValue = (
-  headers: Record<string, unknown> | undefined,
-  headerName: string,
-): string | undefined => {
-  if (!headers) {
-    return undefined;
-  }
-
-  const normalizedName = headerName.toLowerCase();
-  for (const [name, value] of Object.entries(headers)) {
-    if (name.toLowerCase() === normalizedName && typeof value === "string") {
-      return value;
-    }
-  }
-
-  return undefined;
-};
-
-const isTruthyFlag = (value: unknown): boolean => {
-  if (typeof value === "boolean") {
-    return value;
-  }
-
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    return (
-      normalized === "1" ||
-      normalized === "true" ||
-      normalized === "yes" ||
-      normalized === "on"
-    );
-  }
-
-  if (Array.isArray(value)) {
-    return value.some((entry) => isTruthyFlag(entry));
-  }
-
-  return false;
-};
-
-const readForceFlagFromUrl = (url: unknown): boolean => {
-  if (typeof url !== "string") {
-    return false;
-  }
-
-  try {
-    const parsed = new URL(url, "https://example.invalid");
-    return isTruthyFlag(parsed.searchParams.get("force"));
-  } catch {
-    return false;
-  }
-};
-
-const isForceRunRequested = (req: VercelRequest): boolean => {
-  const query = req.query as Record<string, unknown> | undefined;
-  if (isTruthyFlag(query?.force)) {
-    return true;
-  }
-
-  if (readForceFlagFromUrl(req.url)) {
-    return true;
-  }
-
-  if (req.body && typeof req.body === "object" && !Array.isArray(req.body)) {
-    const body = req.body as Record<string, unknown>;
-    if (isTruthyFlag(body.force)) {
-      return true;
-    }
-  }
-
-  return isTruthyFlag(
-    getHeaderValue(
-      req.headers as Record<string, unknown> | undefined,
-      "x-datocms-force-run",
-    ),
-  );
-};
-
-const isVercelCronInvocation = (req: VercelRequest): boolean => {
-  const headers = req.headers as Record<string, unknown> | undefined;
-  const userAgent = getHeaderValue(headers, "user-agent");
-  if (userAgent?.toLowerCase().includes("vercel-cron")) {
-    return true;
-  }
-
-  return Boolean(getHeaderValue(headers, "x-vercel-cron"));
-};
-
-const createScheduledSkipPayload = (result: ScheduledScopedBackupResult) => ({
-  ok: true,
-  skipped: true,
-  reason: "NOT_DUE_IN_DISTRIBUTED_SLOT",
-  scope: result.scope,
-  schedule: result.schedule,
-});
-
 export const createWeeklyBackupHandler = (
   runBackup: () => Promise<ScopedBackupResult> = () => runWeeklyBackup(),
-  runScheduledBackup: (options?: { cadence?: ScheduledCadence }) => Promise<ScheduledScopedBackupResult> = (
-    options,
-  ) => runScheduledWeeklyBackup(options),
 ) => {
   return async (req: VercelRequest, res: VercelResponse) => {
     setCorsHeaders(res);
@@ -144,27 +42,6 @@ export const createWeeklyBackupHandler = (
     }
 
     try {
-      const isCronInvocation = isVercelCronInvocation(req);
-      const shouldUseDistributedSchedule =
-        (req.method === "GET" || isCronInvocation) && !isForceRunRequested(req);
-
-      if (shouldUseDistributedSchedule) {
-        const scheduledResult = await runScheduledBackup({
-          cadence: isCronInvocation ? "daily" : "hourly",
-        });
-        if (scheduledResult.status === "skipped") {
-          res.status(200).json(createScheduledSkipPayload(scheduledResult));
-          return;
-        }
-
-        res.status(200).json({
-          ok: true,
-          result: scheduledResult.result,
-          schedule: scheduledResult.schedule,
-        });
-        return;
-      }
-
       const result = await runBackup();
       res.status(200).json({
         ok: true,

@@ -3,4 +3,4 @@ main = "cloudflare/worker.ts"
 compatibility_date = "2026-02-26"
 
 [triggers]
-crons = ["5 * * * *", "35 * * * *"]
+crons = ["5 2 * * *"]

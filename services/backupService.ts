@@ -1,4 +1,5 @@
 import { buildClient } from "@datocms/cma-client-node";
+import { BACKUPS_PLUGIN_NAME } from "../utils/healthContract";
 
 export const API_TOKEN_ENV_VAR = "DATOCMS_FULLACCESS_API_TOKEN";
 export const LEGACY_API_TOKEN_ENV_VAR = "DATOCMS_FULLACCESS_TOKEN";
@@ -12,10 +13,11 @@ export class MissingApiTokenError extends Error {
   }
 }
 
+export type BackupCadence = "daily" | "weekly" | "biweekly" | "monthly";
 export type BackupScope = "daily" | "weekly";
 
 export type ScopedBackupResult = {
-  scope: BackupScope;
+  scope: BackupCadence;
   createdEnvironmentId: string;
   deletedEnvironmentId: string | null;
 };
@@ -27,39 +29,29 @@ export type InitializationResult = {
 
 type BackupExecutionOptions = {
   apiToken?: string;
+  now?: Date;
 };
 
-export type ScheduledCadence = "hourly" | "daily";
+export type ScheduledCadence = "daily";
 
 export type SchedulerProvider = "vercel" | "netlify" | "cloudflare" | "unknown";
 
-type ScheduledBackupExecutionOptions = BackupExecutionOptions & {
-  now?: Date;
-  cadence?: ScheduledCadence;
-};
-
-export type DistributedScheduleWindow = {
-  slotHourUtc: number;
-  slotWeekdayUtc: number | null;
-  currentHourUtc: number;
-  currentWeekdayUtc: number;
-};
+export type ScheduledSkipReason = "NOT_DUE" | "SCHEDULER_DISABLED";
 
 export type ScheduledScopedBackupResult =
   | {
       scope: BackupScope;
       status: "executed";
-      schedule: DistributedScheduleWindow;
       result: ScopedBackupResult;
     }
   | {
       scope: BackupScope;
       status: "skipped";
-      schedule: DistributedScheduleWindow;
+      reason: ScheduledSkipReason;
     };
 
 export type BackupStatusSlot = {
-  scope: BackupScope;
+  scope: BackupCadence;
   executionMode: "lambda_cron";
   lastBackupAt: string | null;
   nextBackupAt: string | null;
@@ -68,13 +60,113 @@ export type BackupStatusSlot = {
 export type BackupStatusResult = {
   scheduler: {
     provider: SchedulerProvider;
-    cadence: ScheduledCadence;
+    cadence: "daily";
   };
   slots: {
     daily: BackupStatusSlot;
     weekly: BackupStatusSlot;
+    biweekly: BackupStatusSlot;
+    monthly: BackupStatusSlot;
   };
   checkedAt: string;
+};
+
+export type ScheduledCadenceExecutionResult =
+  | {
+      scope: BackupCadence;
+      status: "executed";
+      result: ScopedBackupResult;
+    }
+  | {
+      scope: BackupCadence;
+      status: "failed";
+      error: string;
+    };
+
+export type ScheduledBackupsRunResult = {
+  scheduler: {
+    provider: SchedulerProvider;
+    cadence: "daily";
+  };
+  schedule: {
+    timezone: string;
+    enabledCadences: BackupCadence[];
+    anchorLocalDate: string;
+  };
+  checkedAt: string;
+  skipped: boolean;
+  reason?: ScheduledSkipReason;
+  results: ScheduledCadenceExecutionResult[];
+};
+
+const BACKUP_CADENCES: BackupCadence[] = [
+  "daily",
+  "weekly",
+  "biweekly",
+  "monthly",
+];
+const DEFAULT_ENABLED_CADENCES: BackupCadence[] = ["daily", "weekly"];
+const DEFAULT_TIMEZONE = "UTC";
+const DEFAULT_LAMBDALESS_TIME = "00:00";
+const BACKUP_SCHEDULE_VERSION = 1 as const;
+const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+export class AutomaticBackupsPluginNotFoundError extends Error {
+  constructor() {
+    super("Could not locate the Automatic Environment Backups plugin instance.");
+    this.name = "AutomaticBackupsPluginNotFoundError";
+  }
+}
+
+type LocalDateParts = {
+  year: number;
+  month: number;
+  day: number;
+};
+
+type AutomaticBackupsPlugin = {
+  id: string;
+  name: string;
+  package_name: string | null;
+  parameters: Record<string, unknown>;
+};
+
+type BackupScheduleConfig = {
+  version: 1;
+  enabledCadences: BackupCadence[];
+  timezone: string;
+  lambdalessTime: string;
+  anchorLocalDate: string;
+  updatedAt: string;
+};
+
+type AutomaticBackupsScheduleState = {
+  lastRunLocalDateByCadence?: Partial<Record<BackupCadence, string>>;
+  lastRunAtByCadence?: Partial<Record<BackupCadence, string>>;
+  lastManagedEnvironmentIdByCadence?: Partial<Record<BackupCadence, string>>;
+  lastExecutionModeByCadence?: Partial<Record<BackupCadence, "lambda_cron" | "lambda_manual">>;
+  lastErrorByCadence?: Partial<Record<BackupCadence, string>>;
+  dailyLastRunDate?: string;
+  weeklyLastRunKey?: string;
+  lastDailyRunAt?: string;
+  lastWeeklyRunAt?: string;
+  lastDailyManagedEnvironmentId?: string;
+  lastWeeklyManagedEnvironmentId?: string;
+  lastDailyExecutionMode?: "lambda_cron" | "lambda_manual";
+  lastWeeklyExecutionMode?: "lambda_cron" | "lambda_manual";
+  lastDailyError?: string;
+  lastWeeklyError?: string;
+};
+
+type BackupContext = {
+  apiToken: string;
+  client: ReturnType<typeof buildClient>;
+  pluginId: string | null;
+  pluginParameters: Record<string, unknown>;
+  scheduleConfig: BackupScheduleConfig;
+  scheduleState: AutomaticBackupsScheduleState;
+  schedulerEnabled: boolean;
 };
 
 const getProcessEnv = (): NodeJS.ProcessEnv | undefined => {
@@ -84,23 +176,6 @@ const getProcessEnv = (): NodeJS.ProcessEnv | undefined => {
 
   return process.env;
 };
-
-const getDateSuffix = () => new Date().toISOString().split("T")[0];
-
-const getEnvironmentPrefix = (scope: BackupScope) =>
-  scope === "daily" ? "backup-plugin-daily" : "backup-plugin-weekly";
-
-const DISTRIBUTION_HASH_SALT = "datocms-backup-distribution-v1";
-const HOURS_PER_DAY = 24;
-const DAYS_PER_WEEK = 7;
-const HOURS_PER_WEEK = HOURS_PER_DAY * DAYS_PER_WEEK;
-const FNV1A_OFFSET_BASIS = 0x811c9dc5;
-const FNV1A_PRIME = 0x01000193;
-const NETLIFY_DAILY_MINUTE_UTC = 5;
-const NETLIFY_WEEKLY_MINUTE_UTC = 35;
-const VERCEL_CRON_HOUR_UTC = 2;
-const VERCEL_DAILY_MINUTE_UTC = 5;
-const VERCEL_WEEKLY_MINUTE_UTC = 35;
 
 export const resolveApiToken = (apiToken?: string): string => {
   const processEnv = getProcessEnv();
@@ -128,19 +203,582 @@ export const assignApiTokenToProcessEnv = (apiToken: string) => {
   }
 };
 
-const hashString = (input: string): number => {
-  let hash = FNV1A_OFFSET_BASIS;
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, FNV1A_PRIME);
-  }
+const toOptionalString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 
-  return hash >>> 0;
+const isBackupCadence = (value: unknown): value is BackupCadence => {
+  return BACKUP_CADENCES.includes(value as BackupCadence);
 };
 
-const buildDistributionSeed = (scope: BackupScope, apiToken: string) =>
-  `${DISTRIBUTION_HASH_SALT}:${scope}:${apiToken}`;
+const isAutomaticBackupsPluginName = (value: unknown): boolean => {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === BACKUPS_PLUGIN_NAME.toLowerCase() ||
+    normalized === "automatic environment backups"
+  );
+};
+
+const findAutomaticBackupsPlugin = async (
+  apiToken: string,
+): Promise<AutomaticBackupsPlugin | null> => {
+  const client = buildClient({ apiToken });
+  const plugins = (await client.plugins.list()) as AutomaticBackupsPlugin[];
+  const byPackageName = plugins.find(
+    (plugin) => plugin.package_name === BACKUPS_PLUGIN_NAME,
+  );
+
+  if (byPackageName) {
+    return byPackageName;
+  }
+
+  const byPluginName = plugins.find((plugin) =>
+    isAutomaticBackupsPluginName(plugin.name),
+  );
+  return byPluginName ?? null;
+};
+
+const isValidTimezone = (value: string): boolean => {
+  try {
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: value,
+      year: "numeric",
+    }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const ensureTimezone = (value: unknown, fallback: string): string => {
+  const candidate = typeof value === "string" ? value.trim() : "";
+  if (candidate && isValidTimezone(candidate)) {
+    return candidate;
+  }
+
+  if (isValidTimezone(fallback)) {
+    return fallback;
+  }
+
+  return DEFAULT_TIMEZONE;
+};
+
+const pad2 = (value: number): string => String(value).padStart(2, "0");
+
+const getDaysInMonth = (year: number, month: number): number => {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+};
+
+const parseLocalDateKey = (value: string): LocalDateParts | null => {
+  if (!DATE_KEY_PATTERN.test(value)) {
+    return null;
+  }
+
+  const [year, month, day] = value.split("-").map((part) => Number(part));
+  if (!year || !month || !day) {
+    return null;
+  }
+
+  const maxDay = getDaysInMonth(year, month);
+  if (month < 1 || month > 12 || day < 1 || day > maxDay) {
+    return null;
+  }
+
+  return { year, month, day };
+};
+
+const toLocalDateKeyFromParts = (parts: LocalDateParts): string =>
+  `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}`;
+
+const buildUtcDateFromLocalParts = (parts: LocalDateParts): Date => {
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+};
+
+const toLocalDateParts = (date: Date, timezone: string): LocalDateParts => {
+  const safeTimezone = ensureTimezone(timezone, DEFAULT_TIMEZONE);
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: safeTimezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = formatter.formatToParts(date);
+  const year = Number(parts.find((part) => part.type === "year")?.value);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
+  const day = Number(parts.find((part) => part.type === "day")?.value);
+
+  if (!year || !month || !day) {
+    return {
+      year: date.getUTCFullYear(),
+      month: date.getUTCMonth() + 1,
+      day: date.getUTCDate(),
+    };
+  }
+
+  return { year, month, day };
+};
+
+const toLocalDateKey = (date: Date, timezone: string): string => {
+  return toLocalDateKeyFromParts(toLocalDateParts(date, timezone));
+};
+
+const compareDateKeys = (left: string, right: string): number => {
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
+};
+
+const getDayDiff = (startDateKey: string, endDateKey: string): number => {
+  const startParts = parseLocalDateKey(startDateKey);
+  const endParts = parseLocalDateKey(endDateKey);
+
+  if (!startParts || !endParts) {
+    return 0;
+  }
+
+  const diffMs =
+    buildUtcDateFromLocalParts(endParts).getTime() -
+    buildUtcDateFromLocalParts(startParts).getTime();
+  return Math.floor(diffMs / 86400000);
+};
+
+const addDaysToDateKey = (dateKey: string, dayDelta: number): string => {
+  const parts = parseLocalDateKey(dateKey);
+  if (!parts) {
+    return dateKey;
+  }
+
+  const base = buildUtcDateFromLocalParts(parts);
+  base.setUTCDate(base.getUTCDate() + dayDelta);
+  return toLocalDateKeyFromParts({
+    year: base.getUTCFullYear(),
+    month: base.getUTCMonth() + 1,
+    day: base.getUTCDate(),
+  });
+};
+
+const addMonthsToDateKey = (dateKey: string, monthDelta: number): string => {
+  const parts = parseLocalDateKey(dateKey);
+  if (!parts) {
+    return dateKey;
+  }
+
+  const rawMonthIndex = parts.month - 1 + monthDelta;
+  const year = parts.year + Math.floor(rawMonthIndex / 12);
+  const monthIndex = ((rawMonthIndex % 12) + 12) % 12;
+  const month = monthIndex + 1;
+  const day = Math.min(parts.day, getDaysInMonth(year, month));
+  return toLocalDateKeyFromParts({ year, month, day });
+};
+
+const normalizeCadences = (value: unknown): BackupCadence[] => {
+  if (!Array.isArray(value)) {
+    return [...DEFAULT_ENABLED_CADENCES];
+  }
+
+  const selected = new Set<BackupCadence>();
+  for (const entry of value) {
+    if (isBackupCadence(entry)) {
+      selected.add(entry);
+    }
+  }
+
+  if (selected.size === 0) {
+    return [...DEFAULT_ENABLED_CADENCES];
+  }
+
+  return BACKUP_CADENCES.filter((cadence) => selected.has(cadence));
+};
+
+const normalizeBackupScheduleConfig = ({
+  value,
+  timezoneFallback,
+  now,
+}: {
+  value: unknown;
+  timezoneFallback: string;
+  now: Date;
+}): { config: BackupScheduleConfig; requiresMigration: boolean } => {
+  const fallbackTimezone = ensureTimezone(timezoneFallback, DEFAULT_TIMEZONE);
+  const fallbackAnchor = toLocalDateKey(now, fallbackTimezone);
+  const fallbackUpdatedAt = now.toISOString();
+
+  if (!isObject(value)) {
+    return {
+      config: {
+        version: BACKUP_SCHEDULE_VERSION,
+        enabledCadences: [...DEFAULT_ENABLED_CADENCES],
+        timezone: fallbackTimezone,
+        lambdalessTime: DEFAULT_LAMBDALESS_TIME,
+        anchorLocalDate: fallbackAnchor,
+        updatedAt: fallbackUpdatedAt,
+      },
+      requiresMigration: true,
+    };
+  }
+
+  const timezone = ensureTimezone(value.timezone, fallbackTimezone);
+  const anchorLocalDate =
+    typeof value.anchorLocalDate === "string" &&
+    parseLocalDateKey(value.anchorLocalDate.trim())
+      ? value.anchorLocalDate.trim()
+      : toLocalDateKey(now, timezone);
+  const lambdalessTime =
+    typeof value.lambdalessTime === "string" &&
+    TIME_PATTERN.test(value.lambdalessTime.trim())
+      ? value.lambdalessTime.trim()
+      : DEFAULT_LAMBDALESS_TIME;
+
+  const config: BackupScheduleConfig = {
+    version: BACKUP_SCHEDULE_VERSION,
+    enabledCadences: normalizeCadences(value.enabledCadences),
+    timezone,
+    lambdalessTime,
+    anchorLocalDate,
+    updatedAt:
+      typeof value.updatedAt === "string" && value.updatedAt.trim()
+        ? value.updatedAt.trim()
+        : fallbackUpdatedAt,
+  };
+
+  const rawTimezone = typeof value.timezone === "string" ? value.timezone.trim() : "";
+  const rawAnchor =
+    typeof value.anchorLocalDate === "string" ? value.anchorLocalDate.trim() : "";
+  const rawUpdatedAt = typeof value.updatedAt === "string" ? value.updatedAt.trim() : "";
+  const requiresMigration =
+    value.version !== BACKUP_SCHEDULE_VERSION ||
+    !Array.isArray(value.enabledCadences) ||
+    normalizeCadences(value.enabledCadences).length === 0 ||
+    !rawTimezone ||
+    !TIME_PATTERN.test(
+      typeof value.lambdalessTime === "string" ? value.lambdalessTime.trim() : "",
+    ) ||
+    !parseLocalDateKey(rawAnchor) ||
+    !rawUpdatedAt;
+
+  return {
+    config,
+    requiresMigration,
+  };
+};
+
+export const normalizeBackupSchedule = normalizeBackupScheduleConfig;
+
+const toCadenceMap = (
+  value: unknown,
+): Partial<Record<BackupCadence, string>> | undefined => {
+  if (!isObject(value)) {
+    return undefined;
+  }
+
+  const mapped: Partial<Record<BackupCadence, string>> = {};
+  for (const [key, rawValue] of Object.entries(value)) {
+    if (!isBackupCadence(key)) {
+      continue;
+    }
+
+    const stringValue = toOptionalString(rawValue);
+    if (stringValue) {
+      mapped[key] = stringValue;
+    }
+  }
+
+  return Object.keys(mapped).length > 0 ? mapped : undefined;
+};
+
+const toScheduleState = (value: unknown): AutomaticBackupsScheduleState => {
+  if (!isObject(value)) {
+    return {};
+  }
+
+  return {
+    ...value,
+    lastRunLocalDateByCadence: toCadenceMap(value.lastRunLocalDateByCadence),
+    lastRunAtByCadence: toCadenceMap(value.lastRunAtByCadence),
+    lastManagedEnvironmentIdByCadence: toCadenceMap(
+      value.lastManagedEnvironmentIdByCadence,
+    ),
+    lastExecutionModeByCadence: toCadenceMap(
+      value.lastExecutionModeByCadence,
+    ) as AutomaticBackupsScheduleState["lastExecutionModeByCadence"],
+    lastErrorByCadence: toCadenceMap(value.lastErrorByCadence),
+    dailyLastRunDate: toOptionalString(value.dailyLastRunDate),
+    weeklyLastRunKey: toOptionalString(value.weeklyLastRunKey),
+    lastDailyRunAt: toOptionalString(value.lastDailyRunAt),
+    lastWeeklyRunAt: toOptionalString(value.lastWeeklyRunAt),
+    lastDailyManagedEnvironmentId: toOptionalString(value.lastDailyManagedEnvironmentId),
+    lastWeeklyManagedEnvironmentId: toOptionalString(value.lastWeeklyManagedEnvironmentId),
+    lastDailyExecutionMode:
+      value.lastDailyExecutionMode === "lambda_cron" ||
+      value.lastDailyExecutionMode === "lambda_manual"
+        ? value.lastDailyExecutionMode
+        : undefined,
+    lastWeeklyExecutionMode:
+      value.lastWeeklyExecutionMode === "lambda_cron" ||
+      value.lastWeeklyExecutionMode === "lambda_manual"
+        ? value.lastWeeklyExecutionMode
+        : undefined,
+    lastDailyError: toOptionalString(value.lastDailyError),
+    lastWeeklyError: toOptionalString(value.lastWeeklyError),
+  };
+};
+
+const toUtcIsoWeekKey = (date: Date): string => {
+  const workingDate = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
+  const day = workingDate.getUTCDay() || 7;
+  workingDate.setUTCDate(workingDate.getUTCDate() + 4 - day);
+
+  const yearStart = new Date(Date.UTC(workingDate.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(
+    ((workingDate.getTime() - yearStart.getTime()) / 86400000 + 1) / 7,
+  );
+
+  return `${workingDate.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+};
+
+const getLastRunLocalDateForCadence = ({
+  scheduleState,
+  cadence,
+  now,
+  timezone,
+}: {
+  scheduleState: AutomaticBackupsScheduleState;
+  cadence: BackupCadence;
+  now: Date;
+  timezone: string;
+}): string | undefined => {
+  const fromCadenceMap = scheduleState.lastRunLocalDateByCadence?.[cadence];
+  if (fromCadenceMap && parseLocalDateKey(fromCadenceMap)) {
+    return fromCadenceMap;
+  }
+
+  if (cadence === "daily") {
+    if (scheduleState.dailyLastRunDate && parseLocalDateKey(scheduleState.dailyLastRunDate)) {
+      return scheduleState.dailyLastRunDate;
+    }
+  }
+
+  if (cadence === "weekly" && scheduleState.weeklyLastRunKey) {
+    const currentWeek = toUtcIsoWeekKey(now);
+    if (scheduleState.weeklyLastRunKey === currentWeek) {
+      return toLocalDateKey(now, timezone);
+    }
+  }
+
+  return undefined;
+};
+
+const isCadenceScheduledOnDate = ({
+  cadence,
+  anchorLocalDate,
+  localDate,
+}: {
+  cadence: BackupCadence;
+  anchorLocalDate: string;
+  localDate: string;
+}): boolean => {
+  if (!parseLocalDateKey(anchorLocalDate) || !parseLocalDateKey(localDate)) {
+    return cadence === "daily";
+  }
+
+  if (compareDateKeys(localDate, anchorLocalDate) < 0) {
+    return false;
+  }
+
+  if (cadence === "daily") {
+    return true;
+  }
+
+  if (cadence === "weekly" || cadence === "biweekly") {
+    const interval = cadence === "weekly" ? 7 : 14;
+    const diffDays = getDayDiff(anchorLocalDate, localDate);
+    return diffDays >= 0 && diffDays % interval === 0;
+  }
+
+  const anchorParts = parseLocalDateKey(anchorLocalDate);
+  const currentParts = parseLocalDateKey(localDate);
+  if (!anchorParts || !currentParts) {
+    return false;
+  }
+
+  const dueDay = Math.min(
+    anchorParts.day,
+    getDaysInMonth(currentParts.year, currentParts.month),
+  );
+  return currentParts.day === dueDay;
+};
+
+const isCadenceDueNow = ({
+  cadence,
+  anchorLocalDate,
+  currentLocalDate,
+  lastRunLocalDate,
+}: {
+  cadence: BackupCadence;
+  anchorLocalDate: string;
+  currentLocalDate: string;
+  lastRunLocalDate?: string;
+}): boolean => {
+  if (
+    typeof lastRunLocalDate === "string" &&
+    compareDateKeys(lastRunLocalDate, currentLocalDate) === 0
+  ) {
+    return false;
+  }
+
+  return isCadenceScheduledOnDate({
+    cadence,
+    anchorLocalDate,
+    localDate: currentLocalDate,
+  });
+};
+
+export const isCadenceDue = isCadenceDueNow;
+
+const getNextDueLocalDate = ({
+  cadence,
+  anchorLocalDate,
+  currentLocalDate,
+  lastRunLocalDate,
+}: {
+  cadence: BackupCadence;
+  anchorLocalDate: string;
+  currentLocalDate: string;
+  lastRunLocalDate?: string;
+}): string => {
+  const alreadyRanToday =
+    typeof lastRunLocalDate === "string" &&
+    compareDateKeys(lastRunLocalDate, currentLocalDate) === 0;
+
+  if (
+    !alreadyRanToday &&
+    isCadenceScheduledOnDate({ cadence, anchorLocalDate, localDate: currentLocalDate })
+  ) {
+    return currentLocalDate;
+  }
+
+  if (cadence === "daily") {
+    return addDaysToDateKey(currentLocalDate, 1);
+  }
+
+  if (cadence === "weekly" || cadence === "biweekly") {
+    const interval = cadence === "weekly" ? 7 : 14;
+    const diffDays = getDayDiff(anchorLocalDate, currentLocalDate);
+
+    if (diffDays < 0) {
+      return anchorLocalDate;
+    }
+
+    const remainder = diffDays % interval;
+    const offset = remainder === 0 ? interval : interval - remainder;
+    return addDaysToDateKey(currentLocalDate, offset);
+  }
+
+  const currentParts = parseLocalDateKey(currentLocalDate);
+  const anchorParts = parseLocalDateKey(anchorLocalDate);
+  if (!currentParts || !anchorParts) {
+    return currentLocalDate;
+  }
+
+  const dueThisMonth = toLocalDateKeyFromParts({
+    year: currentParts.year,
+    month: currentParts.month,
+    day: Math.min(anchorParts.day, getDaysInMonth(currentParts.year, currentParts.month)),
+  });
+
+  if (
+    compareDateKeys(dueThisMonth, currentLocalDate) > 0 ||
+    (compareDateKeys(dueThisMonth, currentLocalDate) === 0 && !alreadyRanToday)
+  ) {
+    return dueThisMonth;
+  }
+
+  const firstOfCurrentMonth = toLocalDateKeyFromParts({
+    year: currentParts.year,
+    month: currentParts.month,
+    day: 1,
+  });
+  const firstOfNextMonth = addMonthsToDateKey(firstOfCurrentMonth, 1);
+  const nextMonthParts = parseLocalDateKey(firstOfNextMonth);
+  if (!nextMonthParts) {
+    return firstOfNextMonth;
+  }
+
+  return toLocalDateKeyFromParts({
+    year: nextMonthParts.year,
+    month: nextMonthParts.month,
+    day: Math.min(anchorParts.day, getDaysInMonth(nextMonthParts.year, nextMonthParts.month)),
+  });
+};
+
+export const getNextDueDateForCadence = getNextDueLocalDate;
+
+export const toTimezoneLocalDateKey = toLocalDateKey;
+
+const toUtcDateFromLocalDateKey = (localDateKey: string): Date | undefined => {
+  const parsed = parseLocalDateKey(localDateKey);
+  if (!parsed) {
+    return undefined;
+  }
+
+  return new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day, 0, 0, 0, 0));
+};
+
+const getEnvironmentPrefix = (scope: BackupCadence) => {
+  switch (scope) {
+    case "daily":
+      return "backup-plugin-daily";
+    case "weekly":
+      return "backup-plugin-weekly";
+    case "biweekly":
+      return "backup-plugin-biweekly";
+    case "monthly":
+      return "backup-plugin-monthly";
+  }
+};
+
+const getDateSuffix = (now: Date) => now.toISOString().split("T")[0];
+
+const getConfiguredLambdaDeploymentUrl = (
+  parameters: Record<string, unknown>,
+): string | undefined => {
+  return (
+    toOptionalString(parameters.deploymentURL) ||
+    toOptionalString(parameters.netlifyURL) ||
+    toOptionalString(parameters.vercelURL)
+  );
+};
+
+export const isLambdaSchedulerEnabledFromPluginParameters = (
+  parameters: unknown,
+): boolean => {
+  if (!isObject(parameters)) {
+    return false;
+  }
+
+  const configuredLambdaUrl = getConfiguredLambdaDeploymentUrl(parameters);
+  if (!configuredLambdaUrl) {
+    return false;
+  }
+
+  if (parameters.runtimeMode === "lambdaless") {
+    return false;
+  }
+
+  return true;
+};
 
 const resolveSchedulerProvider = (
   providerHint?: SchedulerProvider,
@@ -173,28 +811,480 @@ const resolveSchedulerProvider = (
   return providerHint ?? "unknown";
 };
 
-const resolveSchedulerCadence = (
-  provider: SchedulerProvider,
-): ScheduledCadence => {
-  return provider === "vercel" ? "daily" : "hourly";
+const getProjectTimezone = async (
+  client: ReturnType<typeof buildClient>,
+): Promise<string> => {
+  try {
+    const site = (await client.site.find()) as Record<string, unknown>;
+    const timezone = toOptionalString(site.timezone);
+    return ensureTimezone(timezone, DEFAULT_TIMEZONE);
+  } catch {
+    return DEFAULT_TIMEZONE;
+  }
 };
 
-const toScopeCronConfig = (
-  provider: SchedulerProvider,
-  scope: BackupScope,
-): { minuteUtc: number; hourUtc: number | null } => {
-  if (provider === "vercel") {
+const persistPluginParameters = async ({
+  client,
+  pluginId,
+  parameters,
+}: {
+  client: ReturnType<typeof buildClient>;
+  pluginId: string;
+  parameters: Record<string, unknown>;
+}) => {
+  await client.plugins.update(pluginId, {
+    parameters,
+  });
+};
+
+const getBackupContext = async (
+  options: BackupExecutionOptions = {},
+): Promise<BackupContext> => {
+  const now = options.now ?? new Date();
+  const apiToken = resolveApiToken(options.apiToken);
+  assignApiTokenToProcessEnv(apiToken);
+
+  const client = buildClient({ apiToken });
+  const plugin = await findAutomaticBackupsPlugin(apiToken);
+  const siteTimezone = await getProjectTimezone(client);
+
+  if (!plugin) {
+    const normalized = normalizeBackupScheduleConfig({
+      value: undefined,
+      timezoneFallback: siteTimezone,
+      now,
+    });
+
     return {
-      hourUtc: VERCEL_CRON_HOUR_UTC,
-      minuteUtc:
-        scope === "daily" ? VERCEL_DAILY_MINUTE_UTC : VERCEL_WEEKLY_MINUTE_UTC,
+      apiToken,
+      client,
+      pluginId: null,
+      pluginParameters: {},
+      scheduleConfig: normalized.config,
+      scheduleState: {},
+      schedulerEnabled: true,
+    };
+  }
+
+  const pluginParameters = isObject(plugin.parameters) ? plugin.parameters : {};
+  const normalized = normalizeBackupScheduleConfig({
+    value: pluginParameters.backupSchedule,
+    timezoneFallback: siteTimezone,
+    now,
+  });
+
+  const updatedParameters = {
+    ...pluginParameters,
+    ...(normalized.requiresMigration ? { backupSchedule: normalized.config } : {}),
+  };
+
+  if (normalized.requiresMigration) {
+    await persistPluginParameters({
+      client,
+      pluginId: plugin.id,
+      parameters: updatedParameters,
+    });
+  }
+
+  return {
+    apiToken,
+    client,
+    pluginId: plugin.id,
+    pluginParameters: updatedParameters,
+    scheduleConfig: normalized.config,
+    scheduleState: toScheduleState(updatedParameters.automaticBackupsSchedule),
+    schedulerEnabled: isLambdaSchedulerEnabledFromPluginParameters(updatedParameters),
+  };
+};
+
+const persistScheduleState = async ({
+  context,
+  scheduleState,
+}: {
+  context: BackupContext;
+  scheduleState: AutomaticBackupsScheduleState;
+}) => {
+  if (!context.pluginId) {
+    return;
+  }
+
+  const nextParameters = {
+    ...context.pluginParameters,
+    automaticBackupsSchedule: scheduleState,
+  };
+
+  await persistPluginParameters({
+    client: context.client,
+    pluginId: context.pluginId,
+    parameters: nextParameters,
+  });
+};
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : "Unknown error";
+
+const executeScopedBackup = async (
+  scope: BackupCadence,
+  options: BackupExecutionOptions = {},
+): Promise<ScopedBackupResult> => {
+  const apiToken = resolveApiToken(options.apiToken);
+  assignApiTokenToProcessEnv(apiToken);
+
+  const now = options.now ?? new Date();
+  const client = buildClient({ apiToken });
+  const environments = await client.environments.list();
+
+  const mainEnvironment = environments.find((environment) => environment.meta.primary);
+  if (!mainEnvironment) {
+    throw new Error("Could not locate the primary DatoCMS environment.");
+  }
+
+  const prefix = getEnvironmentPrefix(scope);
+  const previousBackups = environments.filter(
+    (environment) =>
+      !environment.meta.primary && environment.id.startsWith(`${prefix}-`),
+  );
+
+  for (const previousBackup of previousBackups) {
+    await client.environments.destroy(previousBackup.id);
+  }
+
+  const createdEnvironmentId = `${prefix}-${getDateSuffix(now)}`;
+  await client.environments.fork(mainEnvironment.id, {
+    id: createdEnvironmentId,
+  });
+
+  return {
+    scope,
+    createdEnvironmentId,
+    deletedEnvironmentId: previousBackups[0]?.id ?? null,
+  };
+};
+
+const executeCadencesAndPersistState = async ({
+  context,
+  cadences,
+  now,
+  executionMode,
+}: {
+  context: BackupContext;
+  cadences: BackupCadence[];
+  now: Date;
+  executionMode: "lambda_cron" | "lambda_manual";
+}): Promise<ScheduledCadenceExecutionResult[]> => {
+  const currentLocalDate = toLocalDateKey(now, context.scheduleConfig.timezone);
+  const scheduleState = context.scheduleState;
+  const runLocalDateByCadence: Partial<Record<BackupCadence, string>> = {
+    ...(scheduleState.lastRunLocalDateByCadence ?? {}),
+  };
+  const runAtByCadence: Partial<Record<BackupCadence, string>> = {
+    ...(scheduleState.lastRunAtByCadence ?? {}),
+  };
+  const managedEnvironmentIdByCadence: Partial<Record<BackupCadence, string>> = {
+    ...(scheduleState.lastManagedEnvironmentIdByCadence ?? {}),
+  };
+  const executionModeByCadence: Partial<
+    Record<BackupCadence, "lambda_cron" | "lambda_manual">
+  > = {
+    ...(scheduleState.lastExecutionModeByCadence ?? {}),
+  };
+  const errorByCadence: Partial<Record<BackupCadence, string>> = {
+    ...(scheduleState.lastErrorByCadence ?? {}),
+  };
+
+  const results: ScheduledCadenceExecutionResult[] = [];
+
+  for (const cadence of cadences) {
+    try {
+      const result = await executeScopedBackup(cadence, {
+        apiToken: context.apiToken,
+        now,
+      });
+      const completedAt = new Date().toISOString();
+
+      runLocalDateByCadence[cadence] = currentLocalDate;
+      runAtByCadence[cadence] = completedAt;
+      managedEnvironmentIdByCadence[cadence] = result.createdEnvironmentId;
+      executionModeByCadence[cadence] = executionMode;
+      delete errorByCadence[cadence];
+
+      results.push({
+        scope: cadence,
+        status: "executed",
+        result,
+      });
+    } catch (error) {
+      const message = getErrorMessage(error);
+      errorByCadence[cadence] = message;
+      results.push({
+        scope: cadence,
+        status: "failed",
+        error: message,
+      });
+    }
+  }
+
+  if (context.pluginId && cadences.length > 0) {
+    const nextState: AutomaticBackupsScheduleState = {
+      ...scheduleState,
+      lastRunLocalDateByCadence: runLocalDateByCadence,
+      lastRunAtByCadence: runAtByCadence,
+      lastManagedEnvironmentIdByCadence: managedEnvironmentIdByCadence,
+      lastExecutionModeByCadence: executionModeByCadence,
+      lastErrorByCadence: errorByCadence,
+    };
+
+    if (runLocalDateByCadence.daily) {
+      nextState.dailyLastRunDate = runLocalDateByCadence.daily;
+    }
+    if (runAtByCadence.daily) {
+      nextState.lastDailyRunAt = runAtByCadence.daily;
+      nextState.lastDailyExecutionMode = executionModeByCadence.daily;
+      nextState.lastDailyManagedEnvironmentId = managedEnvironmentIdByCadence.daily;
+      nextState.lastDailyError = errorByCadence.daily;
+    }
+
+    if (runLocalDateByCadence.weekly) {
+      nextState.weeklyLastRunKey = toUtcIsoWeekKey(now);
+    }
+    if (runAtByCadence.weekly) {
+      nextState.lastWeeklyRunAt = runAtByCadence.weekly;
+      nextState.lastWeeklyExecutionMode = executionModeByCadence.weekly;
+      nextState.lastWeeklyManagedEnvironmentId = managedEnvironmentIdByCadence.weekly;
+      nextState.lastWeeklyError = errorByCadence.weekly;
+    }
+
+    await persistScheduleState({
+      context,
+      scheduleState: nextState,
+    });
+  }
+
+  return results;
+};
+
+const getDueCadences = ({
+  context,
+  now,
+}: {
+  context: BackupContext;
+  now: Date;
+}): BackupCadence[] => {
+  const currentLocalDate = toLocalDateKey(now, context.scheduleConfig.timezone);
+
+  return context.scheduleConfig.enabledCadences.filter((cadence) => {
+    const lastRunLocalDate = getLastRunLocalDateForCadence({
+      scheduleState: context.scheduleState,
+      cadence,
+      now,
+      timezone: context.scheduleConfig.timezone,
+    });
+
+    return isCadenceDueNow({
+      cadence,
+      anchorLocalDate: context.scheduleConfig.anchorLocalDate,
+      currentLocalDate,
+      lastRunLocalDate,
+    });
+  });
+};
+
+export const getAutomaticBackupsSchedulerState = async (
+  options: BackupExecutionOptions = {},
+): Promise<{ enabled: boolean; checkedAt: string; pluginId: string | null }> => {
+  const apiToken = resolveApiToken(options.apiToken);
+  assignApiTokenToProcessEnv(apiToken);
+
+  const plugin = await findAutomaticBackupsPlugin(apiToken);
+  if (!plugin) {
+    return {
+      enabled: false,
+      checkedAt: new Date().toISOString(),
+      pluginId: null,
     };
   }
 
   return {
-    hourUtc: null,
-    minuteUtc:
-      scope === "daily" ? NETLIFY_DAILY_MINUTE_UTC : NETLIFY_WEEKLY_MINUTE_UTC,
+    enabled: isLambdaSchedulerEnabledFromPluginParameters(plugin.parameters),
+    checkedAt: new Date().toISOString(),
+    pluginId: plugin.id,
+  };
+};
+
+export const disableAutomaticBackupsScheduler = async (
+  options: BackupExecutionOptions = {},
+): Promise<{ enabled: false; disabledAt: string; pluginId: string }> => {
+  const apiToken = resolveApiToken(options.apiToken);
+  assignApiTokenToProcessEnv(apiToken);
+
+  const plugin = await findAutomaticBackupsPlugin(apiToken);
+  if (!plugin) {
+    throw new AutomaticBackupsPluginNotFoundError();
+  }
+
+  const client = buildClient({ apiToken });
+  const nextParameters = {
+    ...(isObject(plugin.parameters) ? plugin.parameters : {}),
+    deploymentURL: "",
+    netlifyURL: "",
+    vercelURL: "",
+    lambdaConnection: null,
+    connectionValidationMode: null,
+  };
+  await client.plugins.update(plugin.id, {
+    parameters: nextParameters,
+  });
+
+  return {
+    enabled: false,
+    disabledAt: new Date().toISOString(),
+    pluginId: plugin.id,
+  };
+};
+
+export const runDailyBackup = async (
+  options: BackupExecutionOptions = {},
+): Promise<ScopedBackupResult> => {
+  return executeScopedBackup("daily", options);
+};
+
+export const runWeeklyBackup = async (
+  options: BackupExecutionOptions = {},
+): Promise<ScopedBackupResult> => {
+  return executeScopedBackup("weekly", options);
+};
+
+export const runScheduledDailyBackup = async (
+  options: BackupExecutionOptions = {},
+): Promise<ScheduledScopedBackupResult> => {
+  const result = await runDailyBackup(options);
+  return {
+    scope: "daily",
+    status: "executed",
+    result,
+  };
+};
+
+export const runScheduledWeeklyBackup = async (
+  options: BackupExecutionOptions = {},
+): Promise<ScheduledScopedBackupResult> => {
+  const result = await runWeeklyBackup(options);
+  return {
+    scope: "weekly",
+    status: "executed",
+    result,
+  };
+};
+
+export const runScheduledBackups = async (
+  options: BackupExecutionOptions & { providerHint?: SchedulerProvider } = {},
+): Promise<ScheduledBackupsRunResult> => {
+  const now = options.now ?? new Date();
+  const provider = resolveSchedulerProvider(options.providerHint);
+  const context = await getBackupContext(options);
+  const checkedAt = new Date().toISOString();
+
+  if (context.pluginId && !context.schedulerEnabled) {
+    return {
+      scheduler: {
+        provider,
+        cadence: "daily",
+      },
+      schedule: {
+        timezone: context.scheduleConfig.timezone,
+        enabledCadences: context.scheduleConfig.enabledCadences,
+        anchorLocalDate: context.scheduleConfig.anchorLocalDate,
+      },
+      checkedAt,
+      skipped: true,
+      reason: "SCHEDULER_DISABLED",
+      results: [],
+    };
+  }
+
+  const dueCadences = getDueCadences({ context, now });
+  if (dueCadences.length === 0) {
+    return {
+      scheduler: {
+        provider,
+        cadence: "daily",
+      },
+      schedule: {
+        timezone: context.scheduleConfig.timezone,
+        enabledCadences: context.scheduleConfig.enabledCadences,
+        anchorLocalDate: context.scheduleConfig.anchorLocalDate,
+      },
+      checkedAt,
+      skipped: true,
+      reason: "NOT_DUE",
+      results: [],
+    };
+  }
+
+  const results = await executeCadencesAndPersistState({
+    context,
+    cadences: dueCadences,
+    now,
+    executionMode: "lambda_cron",
+  });
+
+  return {
+    scheduler: {
+      provider,
+      cadence: "daily",
+    },
+    schedule: {
+      timezone: context.scheduleConfig.timezone,
+      enabledCadences: context.scheduleConfig.enabledCadences,
+      anchorLocalDate: context.scheduleConfig.anchorLocalDate,
+    },
+    checkedAt,
+    skipped: false,
+    results,
+  };
+};
+
+export const runBackupNow = async (
+  options: BackupExecutionOptions & { providerHint?: SchedulerProvider } = {},
+): Promise<ScheduledBackupsRunResult> => {
+  const now = options.now ?? new Date();
+  const provider = resolveSchedulerProvider(options.providerHint);
+  const context = await getBackupContext(options);
+  const checkedAt = new Date().toISOString();
+
+  const results = await executeCadencesAndPersistState({
+    context,
+    cadences: context.scheduleConfig.enabledCadences,
+    now,
+    executionMode: "lambda_manual",
+  });
+
+  return {
+    scheduler: {
+      provider,
+      cadence: "daily",
+    },
+    schedule: {
+      timezone: context.scheduleConfig.timezone,
+      enabledCadences: context.scheduleConfig.enabledCadences,
+      anchorLocalDate: context.scheduleConfig.anchorLocalDate,
+    },
+    checkedAt,
+    skipped: context.scheduleConfig.enabledCadences.length === 0,
+    reason: context.scheduleConfig.enabledCadences.length === 0 ? "NOT_DUE" : undefined,
+    results,
+  };
+};
+
+export const runInitialization = async (
+  options: BackupExecutionOptions = {},
+): Promise<InitializationResult> => {
+  const daily = await runDailyBackup(options);
+  const weekly = await runWeeklyBackup(options);
+
+  return {
+    daily,
+    weekly,
   };
 };
 
@@ -206,7 +1296,7 @@ export const getLatestBackupCreatedAtForScope = (
       created_at: string;
     };
   }>,
-  scope: BackupScope,
+  scope: BackupCadence,
 ): string | null => {
   const prefix = getEnvironmentPrefix(scope);
 
@@ -225,300 +1315,60 @@ export const getLatestBackupCreatedAtForScope = (
   return matching[0]?.meta.created_at ?? null;
 };
 
-const withUtcDate = (
-  baseDate: Date,
-  offsetDays: number,
-  hourUtc: number,
-  minuteUtc: number,
-): Date =>
-  new Date(
-    Date.UTC(
-      baseDate.getUTCFullYear(),
-      baseDate.getUTCMonth(),
-      baseDate.getUTCDate() + offsetDays,
-      hourUtc,
-      minuteUtc,
-      0,
-      0,
-    ),
-  );
-
-const computeNextDailyDueAt = (
-  now: Date,
-  hourUtc: number,
-  minuteUtc: number,
-): string => {
-  const candidate = withUtcDate(now, 0, hourUtc, minuteUtc);
-  if (candidate.getTime() > now.getTime()) {
-    return candidate.toISOString();
-  }
-
-  return withUtcDate(now, 1, hourUtc, minuteUtc).toISOString();
-};
-
-const computeNextWeeklyDueAt = (
-  now: Date,
-  weekdayUtc: number,
-  hourUtc: number,
-  minuteUtc: number,
-): string => {
-  const currentWeekdayUtc = now.getUTCDay();
-  const deltaDays = (weekdayUtc - currentWeekdayUtc + DAYS_PER_WEEK) % DAYS_PER_WEEK;
-  const candidate = withUtcDate(now, deltaDays, hourUtc, minuteUtc);
-
-  if (candidate.getTime() > now.getTime()) {
-    return candidate.toISOString();
-  }
-
-  return withUtcDate(now, deltaDays + DAYS_PER_WEEK, hourUtc, minuteUtc).toISOString();
-};
-
-export const computeNextBackupAtForScope = ({
-  scope,
-  cadence,
-  provider,
-  now,
-  schedule,
-}: {
-  scope: BackupScope;
-  cadence: ScheduledCadence;
-  provider: SchedulerProvider;
-  now: Date;
-  schedule: DistributedScheduleWindow;
-}): string | null => {
-  const cron = toScopeCronConfig(provider, scope);
-
-  if (scope === "daily") {
-    if (cadence === "daily") {
-      return computeNextDailyDueAt(
-        now,
-        cron.hourUtc ?? VERCEL_CRON_HOUR_UTC,
-        cron.minuteUtc,
-      );
-    }
-
-    return computeNextDailyDueAt(now, schedule.slotHourUtc, cron.minuteUtc);
-  }
-
-  if (schedule.slotWeekdayUtc === null) {
-    return null;
-  }
-
-  if (cadence === "daily") {
-    return computeNextWeeklyDueAt(
-      now,
-      schedule.slotWeekdayUtc,
-      cron.hourUtc ?? VERCEL_CRON_HOUR_UTC,
-      cron.minuteUtc,
-    );
-  }
-
-  return computeNextWeeklyDueAt(
-    now,
-    schedule.slotWeekdayUtc,
-    schedule.slotHourUtc,
-    cron.minuteUtc,
-  );
-};
-
-export const getDistributedScheduleWindow = (
-  scope: BackupScope,
-  apiToken: string,
-  now: Date = new Date(),
-): DistributedScheduleWindow => {
-  const currentHourUtc = now.getUTCHours();
-  const currentWeekdayUtc = now.getUTCDay();
-  const hash = hashString(buildDistributionSeed(scope, apiToken));
-
-  if (scope === "daily") {
-    return {
-      slotHourUtc: hash % HOURS_PER_DAY,
-      slotWeekdayUtc: null,
-      currentHourUtc,
-      currentWeekdayUtc,
-    };
-  }
-
-  const weeklySlot = hash % HOURS_PER_WEEK;
-  return {
-    slotHourUtc: weeklySlot % HOURS_PER_DAY,
-    slotWeekdayUtc: Math.floor(weeklySlot / HOURS_PER_DAY),
-    currentHourUtc,
-    currentWeekdayUtc,
-  };
-};
-
-export const isDistributedScheduleDue = (
-  scope: BackupScope,
-  schedule: DistributedScheduleWindow,
-  cadence: ScheduledCadence = "hourly",
-): boolean => {
-  if (cadence === "daily") {
-    if (scope === "daily") {
-      return true;
-    }
-
-    return schedule.currentWeekdayUtc === schedule.slotWeekdayUtc;
-  }
-
-  if (scope === "daily") {
-    return schedule.currentHourUtc === schedule.slotHourUtc;
-  }
-
-  return (
-    schedule.currentHourUtc === schedule.slotHourUtc &&
-    schedule.currentWeekdayUtc === schedule.slotWeekdayUtc
-  );
-};
-
-const executeScopedBackup = async (
-  scope: BackupScope,
-  options: BackupExecutionOptions = {},
-): Promise<ScopedBackupResult> => {
-  const apiToken = resolveApiToken(options.apiToken);
-  assignApiTokenToProcessEnv(apiToken);
-
-  const client = buildClient({ apiToken });
-  const environments = await client.environments.list();
-
-  const mainEnvironment = environments.find((environment) => environment.meta.primary);
-  if (!mainEnvironment) {
-    throw new Error("Could not locate the primary DatoCMS environment.");
-  }
-
-  const prefix = getEnvironmentPrefix(scope);
-  const previousUnusedBackup = environments.find(
-    (environment) =>
-      environment.id.includes(prefix) && !environment.meta.primary,
-  );
-
-  if (previousUnusedBackup) {
-    await client.environments.destroy(previousUnusedBackup.id);
-  }
-
-  const createdEnvironmentId = `${prefix}-${getDateSuffix()}`;
-
-  await client.environments.fork(mainEnvironment.id, {
-    id: createdEnvironmentId,
-  });
-
-  return {
-    scope,
-    createdEnvironmentId,
-    deletedEnvironmentId: previousUnusedBackup?.id || null,
-  };
-};
-
-const runScheduledScopedBackup = async (
-  scope: BackupScope,
-  options: ScheduledBackupExecutionOptions = {},
-): Promise<ScheduledScopedBackupResult> => {
-  const apiToken = resolveApiToken(options.apiToken);
-  assignApiTokenToProcessEnv(apiToken);
-
-  const schedule = getDistributedScheduleWindow(scope, apiToken, options.now);
-  if (!isDistributedScheduleDue(scope, schedule, options.cadence)) {
-    return {
-      scope,
-      status: "skipped",
-      schedule,
-    };
-  }
-
-  const result = await executeScopedBackup(scope, { apiToken });
-  return {
-    scope,
-    status: "executed",
-    schedule,
-    result,
-  };
-};
-
-export const runDailyBackup = async (
-  options: BackupExecutionOptions = {},
-): Promise<ScopedBackupResult> => {
-  return executeScopedBackup("daily", options);
-};
-
-export const runWeeklyBackup = async (
-  options: BackupExecutionOptions = {},
-): Promise<ScopedBackupResult> => {
-  return executeScopedBackup("weekly", options);
-};
-
-export const runScheduledDailyBackup = async (
-  options: ScheduledBackupExecutionOptions = {},
-): Promise<ScheduledScopedBackupResult> => {
-  return runScheduledScopedBackup("daily", options);
-};
-
-export const runScheduledWeeklyBackup = async (
-  options: ScheduledBackupExecutionOptions = {},
-): Promise<ScheduledScopedBackupResult> => {
-  return runScheduledScopedBackup("weekly", options);
-};
-
-export const runInitialization = async (
-  options: BackupExecutionOptions = {},
-): Promise<InitializationResult> => {
-  const daily = await runDailyBackup(options);
-  const weekly = await runWeeklyBackup(options);
-
-  return {
-    daily,
-    weekly,
-  };
-};
-
 type BackupStatusOptions = BackupExecutionOptions & {
-  now?: Date;
   providerHint?: SchedulerProvider;
 };
 
 export const getBackupStatus = async (
   options: BackupStatusOptions = {},
 ): Promise<BackupStatusResult> => {
-  const apiToken = resolveApiToken(options.apiToken);
-  assignApiTokenToProcessEnv(apiToken);
   const now = options.now ?? new Date();
   const provider = resolveSchedulerProvider(options.providerHint);
-  const cadence = resolveSchedulerCadence(provider);
-  const client = buildClient({ apiToken });
-  const environments = await client.environments.list();
+  const context = await getBackupContext(options);
+  const environments = await context.client.environments.list();
+  const currentLocalDate = toLocalDateKey(now, context.scheduleConfig.timezone);
 
-  const dailySchedule = getDistributedScheduleWindow("daily", apiToken, now);
-  const weeklySchedule = getDistributedScheduleWindow("weekly", apiToken, now);
+  const slots = BACKUP_CADENCES.reduce((accumulator, cadence) => {
+    const enabled = context.scheduleConfig.enabledCadences.includes(cadence);
+    const lastRunLocalDate = getLastRunLocalDateForCadence({
+      scheduleState: context.scheduleState,
+      cadence,
+      now,
+      timezone: context.scheduleConfig.timezone,
+    });
+    const nextDueDate = enabled
+      ? getNextDueLocalDate({
+          cadence,
+          anchorLocalDate: context.scheduleConfig.anchorLocalDate,
+          currentLocalDate,
+          lastRunLocalDate,
+        })
+      : null;
+
+    const nextDueAt = nextDueDate
+      ? toUtcDateFromLocalDateKey(nextDueDate)?.toISOString() ?? null
+      : null;
+
+    accumulator[cadence] = {
+      scope: cadence,
+      executionMode: "lambda_cron",
+      lastBackupAt: getLatestBackupCreatedAtForScope(environments, cadence),
+      nextBackupAt: nextDueAt,
+    };
+
+    return accumulator;
+  }, {} as Record<BackupCadence, BackupStatusSlot>);
 
   return {
     scheduler: {
       provider,
-      cadence,
+      cadence: "daily",
     },
     slots: {
-      daily: {
-        scope: "daily",
-        executionMode: "lambda_cron",
-        lastBackupAt: getLatestBackupCreatedAtForScope(environments, "daily"),
-        nextBackupAt: computeNextBackupAtForScope({
-          scope: "daily",
-          cadence,
-          provider,
-          now,
-          schedule: dailySchedule,
-        }),
-      },
-      weekly: {
-        scope: "weekly",
-        executionMode: "lambda_cron",
-        lastBackupAt: getLatestBackupCreatedAtForScope(environments, "weekly"),
-        nextBackupAt: computeNextBackupAtForScope({
-          scope: "weekly",
-          cadence,
-          provider,
-          now,
-          schedule: weeklySchedule,
-        }),
-      },
+      daily: slots.daily,
+      weekly: slots.weekly,
+      biweekly: slots.biweekly,
+      monthly: slots.monthly,
     },
     checkedAt: new Date().toISOString(),
   };

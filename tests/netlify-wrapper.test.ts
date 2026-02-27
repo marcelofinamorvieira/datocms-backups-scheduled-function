@@ -3,11 +3,14 @@ import test from "node:test";
 import { handler as backupNowNetlifyHandler } from "../netlify/functions/backup-now";
 import { handler as backupStatusNetlifyHandler } from "../netlify/functions/backup-status";
 import { handler as pluginHealthNetlifyHandler } from "../netlify/functions/plugin-health";
+import { handler as schedulerDisconnectNetlifyHandler } from "../netlify/functions/scheduler-disconnect";
 import {
+  BACKUPS_MPI_SCHEDULER_DISCONNECT_REQUEST_MESSAGE,
   BACKUPS_MPI_STATUS_REQUEST_MESSAGE,
   BACKUPS_MPI_PING_MESSAGE,
   BACKUPS_MPI_VERSION,
   BACKUPS_PLUGIN_NAME,
+  BACKUPS_SCHEDULER_DISCONNECT_EVENT_TYPE,
   BACKUPS_STATUS_EVENT_TYPE,
   PLUGIN_HEALTH_EVENT_TYPE,
 } from "../utils/healthContract";
@@ -83,6 +86,30 @@ test("netlify backup-status wrapper preserves method validation response", async
         event_type: BACKUPS_STATUS_EVENT_TYPE,
         mpi: {
           message: BACKUPS_MPI_STATUS_REQUEST_MESSAGE,
+          version: BACKUPS_MPI_VERSION,
+        },
+        plugin: {
+          name: BACKUPS_PLUGIN_NAME,
+          environment: "main",
+        },
+      },
+    }),
+  );
+
+  const payload = JSON.parse(response.body);
+  assert.equal(response.statusCode, 405);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.error.code, "METHOD_NOT_ALLOWED");
+});
+
+test("netlify scheduler-disconnect wrapper preserves method validation response", async () => {
+  const response = await schedulerDisconnectNetlifyHandler(
+    createEvent({
+      method: "GET",
+      body: {
+        event_type: BACKUPS_SCHEDULER_DISCONNECT_EVENT_TYPE,
+        mpi: {
+          message: BACKUPS_MPI_SCHEDULER_DISCONNECT_REQUEST_MESSAGE,
           version: BACKUPS_MPI_VERSION,
         },
         plugin: {

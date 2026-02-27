@@ -1,9 +1,9 @@
-import type { VercelRequest, VercelResponse } from "../../types/vercel";
 import {
   MissingApiTokenError,
-  runBackupNow,
+  runScheduledBackups,
   type ScheduledBackupsRunResult,
 } from "../../services/backupService";
+import type { VercelRequest, VercelResponse } from "../../types/vercel";
 
 const setCorsHeaders = (res: VercelResponse) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -23,26 +23,26 @@ const createErrorPayload = (code: string, message: string) => ({
   },
 });
 
-export const createBackupNowHandler = (
-  runManual: () => Promise<ScheduledBackupsRunResult> = () => runBackupNow(),
+export const createScheduledBackupsHandler = (
+  runJob: () => Promise<ScheduledBackupsRunResult> = () => runScheduledBackups(),
 ) => {
   return async (req: VercelRequest, res: VercelResponse) => {
     setCorsHeaders(res);
 
     if (req.method === "OPTIONS") {
-      res.status(204).end();
+      res.status(200).end();
       return;
     }
 
     if (req.method !== "GET" && req.method !== "POST") {
-      res.status(405).json(
-        createErrorPayload("METHOD_NOT_ALLOWED", "Only GET, POST and OPTIONS are supported"),
-      );
+      res
+        .status(405)
+        .json(createErrorPayload("METHOD_NOT_ALLOWED", "Only GET and POST are supported."));
       return;
     }
 
     try {
-      const result = await runManual();
+      const result = await runJob();
       res.status(200).json({
         ok: true,
         result,
@@ -50,26 +50,30 @@ export const createBackupNowHandler = (
       return;
     } catch (error) {
       if (error instanceof MissingApiTokenError) {
-        res.status(500).json(
-          createErrorPayload(
-            "MISSING_API_TOKEN",
-            "Missing API token. Configure DATOCMS_FULLACCESS_API_TOKEN (or legacy DATOCMS_FULLACCESS_TOKEN).",
-          ),
-        );
+        res
+          .status(500)
+          .json(
+            createErrorPayload(
+              "MISSING_API_TOKEN",
+              "Missing API token. Configure DATOCMS_FULLACCESS_API_TOKEN (or legacy DATOCMS_FULLACCESS_TOKEN).",
+            ),
+          );
         return;
       }
 
-      res.status(500).json(
-        createErrorPayload(
-          "INTERNAL_SERVER_ERROR",
-          error instanceof Error
-            ? error.message
-            : "An unexpected internal error occurred",
-        ),
-      );
+      res
+        .status(500)
+        .json(
+          createErrorPayload(
+            "INTERNAL_SERVER_ERROR",
+            error instanceof Error
+              ? error.message
+              : "An unexpected internal error occurred.",
+          ),
+        );
       return;
     }
   };
 };
 
-export default createBackupNowHandler();
+export default createScheduledBackupsHandler();
