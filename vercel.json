@@ -5,6 +5,10 @@
       "destination": "/api/jobs/daily-backup"
     },
     {
+      "source": "/api/datocms/backup-status",
+      "destination": "/api/datocms/backup-status"
+    },
+    {
       "source": "/.netlify/functions/dailyBackup",
       "destination": "/api/jobs/daily-backup"
     },
@@ -19,6 +23,10 @@
     {
       "source": "/.netlify/functions/plugin-health",
       "destination": "/api/datocms/plugin-health"
+    },
+    {
+      "source": "/.netlify/functions/backup-status",
+      "destination": "/api/datocms/backup-status"
     }
   ],
   "crons": [

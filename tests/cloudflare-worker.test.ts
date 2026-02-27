@@ -6,9 +6,11 @@ import {
   WEEKLY_CRON_SCHEDULE,
 } from "../cloudflare/worker";
 import {
+  BACKUPS_MPI_STATUS_REQUEST_MESSAGE,
   BACKUPS_MPI_PING_MESSAGE,
   BACKUPS_MPI_VERSION,
   BACKUPS_PLUGIN_NAME,
+  BACKUPS_STATUS_EVENT_TYPE,
   PLUGIN_HEALTH_EVENT_TYPE,
 } from "../utils/healthContract";
 
@@ -90,4 +92,34 @@ test("cloudflare worker triggers scheduled jobs for daily and weekly crons", asy
 
   await Promise.all(waitUntilCalls);
   assert.deepEqual(calls, ["daily", "weekly"]);
+});
+
+test("cloudflare worker exposes backup-status route", async () => {
+  const worker = createCloudflareWorker();
+
+  const response = await worker.fetch(
+    new Request("https://example.com/api/datocms/backup-status", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        event_type: BACKUPS_STATUS_EVENT_TYPE,
+        mpi: {
+          message: BACKUPS_MPI_STATUS_REQUEST_MESSAGE,
+          version: BACKUPS_MPI_VERSION,
+        },
+        plugin: {
+          name: BACKUPS_PLUGIN_NAME,
+          environment: "main",
+        },
+      }),
+    }),
+    {},
+  );
+
+  assert.equal(response.status, 500);
+  const payload = await response.json();
+  assert.equal(payload.ok, false);
+  assert.equal(payload.error.code, "MISSING_API_TOKEN");
 });

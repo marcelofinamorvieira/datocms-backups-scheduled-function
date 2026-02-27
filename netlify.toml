@@ -11,6 +11,11 @@
   to = "/.netlify/functions/plugin-health"
   status = 200
 
+[[redirects]]
+  from = "/api/datocms/backup-status"
+  to = "/.netlify/functions/backup-status"
+  status = 200
+
 [template.environment]
   DATOCMS_FULLACCESS_API_TOKEN = "Input your DatoCMS project Full Access Token"
   DATOCMS_FULLACCESS_TOKEN = "Legacy fallback token variable (optional)"

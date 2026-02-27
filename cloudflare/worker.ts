@@ -5,6 +5,7 @@ import {
   runWeeklyBackup,
 } from "../services/backupService";
 import pluginHealthHandler from "../api/datocms/plugin-health";
+import backupStatusHandler from "../api/datocms/backup-status";
 import {
   buildErrorEnvelope,
   buildJsonResponse,
@@ -90,6 +91,30 @@ const createCloudflareWorker = (
       if (pathname === "/api/datocms/plugin-health") {
         const body = await parseRequestBody(request);
         const response = await invokeVercelStyleHandler(pluginHealthHandler, {
+          method: request.method,
+          body,
+        });
+        return buildResponseFromCapturedPayload(response);
+      }
+
+      if (pathname === "/api/datocms/backup-status") {
+        const rawBody = await parseRequestBody(request);
+        const body =
+          rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)
+            ? {
+                ...rawBody,
+                runtime: {
+                  ...(typeof (rawBody as { runtime?: unknown }).runtime === "object" &&
+                  (rawBody as { runtime?: unknown }).runtime &&
+                  !Array.isArray((rawBody as { runtime?: unknown }).runtime)
+                    ? ((rawBody as { runtime: Record<string, unknown> }).runtime ?? {})
+                    : {}),
+                  provider: "cloudflare",
+                },
+              }
+            : rawBody;
+
+        const response = await invokeVercelStyleHandler(backupStatusHandler, {
           method: request.method,
           body,
         });

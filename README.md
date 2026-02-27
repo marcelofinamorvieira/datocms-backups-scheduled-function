@@ -180,7 +180,60 @@ Supported health error codes:
 
 `OPTIONS` is accepted with CORS preflight behavior.
 
-### 2) Daily backup endpoint
+### 2) Backup status
+
+`POST /api/datocms/backup-status`
+
+Request:
+
+```json
+{
+  "event_type": "backup_status_request",
+  "mpi": {
+    "message": "DATOCMS_AUTOMATIC_BACKUPS_PLUGIN_STATUS",
+    "version": "2026-02-26"
+  },
+  "plugin": {
+    "name": "datocms-plugin-automatic-environment-backups",
+    "environment": "main"
+  }
+}
+```
+
+Success:
+
+```json
+{
+  "ok": true,
+  "mpi": {
+    "message": "DATOCMS_AUTOMATIC_BACKUPS_LAMBDA_STATUS",
+    "version": "2026-02-26"
+  },
+  "service": "datocms-backups-scheduled-function",
+  "status": "ready",
+  "scheduler": {
+    "provider": "vercel",
+    "cadence": "daily"
+  },
+  "slots": {
+    "daily": {
+      "scope": "daily",
+      "executionMode": "lambda_cron",
+      "lastBackupAt": "2026-02-26T02:05:00.000Z",
+      "nextBackupAt": "2026-02-27T02:05:00.000Z"
+    },
+    "weekly": {
+      "scope": "weekly",
+      "executionMode": "lambda_cron",
+      "lastBackupAt": "2026-02-24T02:35:00.000Z",
+      "nextBackupAt": "2026-02-28T02:35:00.000Z"
+    }
+  },
+  "checkedAt": "2026-02-26T12:00:00.000Z"
+}
+```
+
+### 3) Daily backup endpoint
 
 Vercel/API route: `GET|POST /api/jobs/daily-backup`
 
@@ -248,13 +301,13 @@ For Vercel daily/weekly handlers, distributed scheduling can be bypassed with:
 
 When forced, handler performs immediate run.
 
-### 3) Weekly backup endpoint
+### 4) Weekly backup endpoint
 
 `GET|POST /api/jobs/weekly-backup`
 
 Same structure as daily, with `scope: "weekly"` and weekday-aware scheduling.
 
-### 4) Initialization endpoint
+### 5) Initialization endpoint
 
 Vercel route: `GET|POST /api/jobs/initialize`
 
@@ -295,9 +348,11 @@ Files:
 
 - `netlify.toml` includes template env vars and redirects for:
   - `/api/datocms/plugin-health`
+  - `/api/datocms/backup-status`
   - `/api/datocms/backup-now`
 - `netlify/functions/backup-now.ts` wraps shared on-demand backup handler
 - `netlify/functions/plugin-health.ts` wraps shared health handler
+- `netlify/functions/backup-status.ts` wraps shared status handler
 - `netlify/functions/dailyBackup/dailyBackup.ts` cron job
 - `netlify/functions/weeklyBackup/weeklyBackup.ts` cron job
 - `netlify/functions/initialization/initialization.ts` legacy initialization handler
@@ -311,6 +366,7 @@ One-click:
 Files:
 
 - `api/datocms/plugin-health.ts`
+- `api/datocms/backup-status.ts`
 - `api/jobs/daily-backup.ts`
 - `api/jobs/weekly-backup.ts`
 - `api/jobs/initialize.ts`
@@ -324,6 +380,7 @@ Files:
 - Entry point: `cloudflare/worker.ts`
 - Route mapping:
   - `POST /api/datocms/plugin-health`
+  - `POST /api/datocms/backup-status`
   - `GET|POST /api/jobs/daily-backup`
   - `GET|POST /api/jobs/weekly-backup`
 - Cron schedule in `wrangler.toml`:

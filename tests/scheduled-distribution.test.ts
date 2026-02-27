@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  computeNextBackupAtForScope,
   getDistributedScheduleWindow,
+  getLatestBackupCreatedAtForScope,
   isDistributedScheduleDue,
   runScheduledDailyBackup,
   runScheduledWeeklyBackup,
@@ -108,4 +110,43 @@ test("scheduled weekly backup skips outside assigned weekday/hour without callin
 
   assert.equal(result.status, "skipped");
   assert.equal(result.scope, "weekly");
+});
+
+test("next due computation supports hourly cadence", () => {
+  const next = computeNextBackupAtForScope({
+    scope: "daily",
+    cadence: "hourly",
+    provider: "netlify",
+    now: new Date("2026-02-26T12:00:00.000Z"),
+    schedule: {
+      slotHourUtc: 13,
+      slotWeekdayUtc: null,
+      currentHourUtc: 12,
+      currentWeekdayUtc: 4,
+    },
+  });
+
+  assert.equal(next, "2026-02-26T13:05:00.000Z");
+});
+
+test("next due computation supports daily cadence", () => {
+  const next = computeNextBackupAtForScope({
+    scope: "weekly",
+    cadence: "daily",
+    provider: "vercel",
+    now: new Date("2026-02-26T12:00:00.000Z"),
+    schedule: {
+      slotHourUtc: 17,
+      slotWeekdayUtc: 5,
+      currentHourUtc: 12,
+      currentWeekdayUtc: 4,
+    },
+  });
+
+  assert.equal(next, "2026-02-27T02:35:00.000Z");
+});
+
+test("latest backup lookup returns null when no managed environments exist", () => {
+  const latest = getLatestBackupCreatedAtForScope([], "daily");
+  assert.equal(latest, null);
 });
