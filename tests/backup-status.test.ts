@@ -13,8 +13,8 @@ import {
 } from "../utils/healthContract";
 
 process.env.DATOCMS_BACKUPS_SHARED_SECRET = "test-shared-secret";
-const withAuthHeaders = () => ({
-  "x-datocms-backups-auth": "test-shared-secret",
+const withAuthHeaders = (sharedSecret = "test-shared-secret") => ({
+  "x-datocms-backups-auth": sharedSecret,
 });
 
 const createValidRequestBody = () => ({

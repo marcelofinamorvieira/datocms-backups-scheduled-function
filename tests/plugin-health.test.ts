@@ -110,20 +110,21 @@ test("plugin health rejects missing auth header", async () => {
   assert.equal(payload.error.code, "UNAUTHORIZED");
 });
 
-test("plugin health returns config error when shared secret is not configured", async () => {
+test("plugin health falls back to default secret when shared secret is not configured", async () => {
   delete process.env.DATOCMS_BACKUPS_SHARED_SECRET;
   const response = await invokeVercelStyleHandler(pluginHealthHandler, {
     method: "POST",
     body: createValidRequestBody(),
-    headers: withAuthHeaders(),
+    headers: {
+      "x-datocms-backups-auth": "superSecretToken",
+    },
   });
 
   process.env.DATOCMS_BACKUPS_SHARED_SECRET = SHARED_SECRET;
 
-  assert.equal(response.statusCode, 500);
+  assert.equal(response.statusCode, 200);
   const payload = JSON.parse(response.body);
-  assert.equal(payload.ok, false);
-  assert.equal(payload.error.code, "MISSING_SHARED_SECRET_CONFIG");
+  assert.equal(payload.ok, true);
 });
 
 process.on("exit", () => {

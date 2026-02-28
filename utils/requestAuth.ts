@@ -2,6 +2,7 @@ import { getHeaderValue } from "./platformAdapters";
 
 export const BACKUPS_AUTH_HEADER_NAME = "X-Datocms-Backups-Auth";
 export const BACKUPS_SHARED_SECRET_ENV_VAR = "DATOCMS_BACKUPS_SHARED_SECRET";
+export const DEFAULT_BACKUPS_SHARED_SECRET = "superSecretToken";
 
 type AuthHeaderMap = Record<string, unknown> | Headers | undefined;
 
@@ -60,11 +61,15 @@ export const resolveBackupsSharedSecret = (sharedSecret?: string): string | unde
   }
 
   if (typeof process === "undefined" || !process.env) {
-    return undefined;
+    return DEFAULT_BACKUPS_SHARED_SECRET;
   }
 
   const fromEnv = process.env[BACKUPS_SHARED_SECRET_ENV_VAR];
-  return typeof fromEnv === "string" && fromEnv.trim() ? fromEnv.trim() : undefined;
+  if (typeof fromEnv === "string" && fromEnv.trim()) {
+    return fromEnv.trim();
+  }
+
+  return DEFAULT_BACKUPS_SHARED_SECRET;
 };
 
 export const validateBackupsSharedSecret = ({

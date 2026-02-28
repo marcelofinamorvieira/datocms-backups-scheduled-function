@@ -39,7 +39,7 @@ The codebase no longer supports:
 
 Required:
 
-- `DATOCMS_BACKUPS_SHARED_SECRET` (for authenticated HTTP routes)
+- `DATOCMS_BACKUPS_SHARED_SECRET` (for authenticated HTTP routes, defaults to `superSecretToken` if omitted)
 - `DATOCMS_FULLACCESS_API_TOKEN` (DatoCMS CMA token)
 
 ## Scheduling
@@ -51,6 +51,11 @@ Default cron schedule across targets:
 The scheduled job uses plugin-backed cadence configuration and due-date logic.
 
 ## Platform targets
+
+Quick deploy links:
+
+- Vercel: https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmarcelofinamorvieira%2Fdatocms-backups-scheduled-function&env=DATOCMS_FULLACCESS_API_TOKEN,DATOCMS_BACKUPS_SHARED_SECRET&project-name=datocms-backups-scheduled-function&repo-name=datocms-backups-scheduled-function
+- Netlify: https://app.netlify.com/start/deploy?repository=https://github.com/marcelofinamorvieira/datocms-backups-scheduled-function
 
 ### Netlify
 
@@ -73,6 +78,17 @@ The scheduled job uses plugin-backed cadence configuration and due-date logic.
   - `POST /api/datocms/backup-status`
   - `POST /api/jobs/scheduled-backups`
 - scheduled hook also runs the unified job at `5 2 * * *`
+
+#### Deploying on Cloudflare Workers
+
+Set both secrets during deploy (these commands prompt for values):
+
+```bash
+wrangler secret put DATOCMS_FULLACCESS_API_TOKEN
+wrangler secret put DATOCMS_BACKUPS_SHARED_SECRET
+```
+
+If `DATOCMS_BACKUPS_SHARED_SECRET` is omitted, auth falls back to `superSecretToken`.
 
 ## Local setup
 

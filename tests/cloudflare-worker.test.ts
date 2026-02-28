@@ -195,7 +195,7 @@ test("cloudflare worker exposes backup-status route", async () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Datocms-Backups-Auth": SHARED_SECRET,
+          "X-Datocms-Backups-Auth": "superSecretToken",
         },
         body: JSON.stringify({
           event_type: BACKUPS_STATUS_EVENT_TYPE,
@@ -209,7 +209,7 @@ test("cloudflare worker exposes backup-status route", async () => {
           },
         }),
       }),
-      { DATOCMS_BACKUPS_SHARED_SECRET: SHARED_SECRET },
+      { DATOCMS_BACKUPS_SHARED_SECRET: "" },
     );
 
     assert.equal(response.status, 500);

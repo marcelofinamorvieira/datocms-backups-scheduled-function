@@ -18,4 +18,4 @@
 
 [template.environment]
   DATOCMS_FULLACCESS_API_TOKEN = "Input your DatoCMS project Full Access Token"
-  DATOCMS_BACKUPS_SHARED_SECRET = "Shared secret used by X-Datocms-Backups-Auth header"
+  DATOCMS_BACKUPS_SHARED_SECRET = "superSecretToken"
