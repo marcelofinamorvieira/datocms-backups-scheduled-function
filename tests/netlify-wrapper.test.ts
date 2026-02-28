@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { handler as backupStatusNetlifyHandler } from "../netlify/functions/backup-status";
+import { handler as backupNowNetlifyHandler } from "../netlify/functions/backup-now";
 import { handler as pluginHealthNetlifyHandler } from "../netlify/functions/plugin-health";
 import {
+  BACKUPS_BACKUP_NOW_EVENT_TYPE,
+  BACKUPS_MPI_BACKUP_NOW_REQUEST_MESSAGE,
   BACKUPS_MPI_STATUS_REQUEST_MESSAGE,
   BACKUPS_MPI_PING_MESSAGE,
   BACKUPS_MPI_VERSION,
@@ -77,6 +80,33 @@ test("netlify backup-status wrapper preserves method validation response", async
         plugin: {
           name: BACKUPS_PLUGIN_NAME,
           environment: "main",
+        },
+      },
+    }),
+  );
+
+  const payload = JSON.parse(response.body);
+  assert.equal(response.statusCode, 405);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.error.code, "METHOD_NOT_ALLOWED");
+});
+
+test("netlify backup-now wrapper preserves method validation response", async () => {
+  const response = await backupNowNetlifyHandler(
+    createEvent({
+      method: "GET",
+      body: {
+        event_type: BACKUPS_BACKUP_NOW_EVENT_TYPE,
+        mpi: {
+          message: BACKUPS_MPI_BACKUP_NOW_REQUEST_MESSAGE,
+          version: BACKUPS_MPI_VERSION,
+        },
+        plugin: {
+          name: BACKUPS_PLUGIN_NAME,
+          environment: "main",
+        },
+        slot: {
+          scope: "daily",
         },
       },
     }),

@@ -76,6 +76,35 @@ export type ScheduledBackupsRunResult = {
   results: ScheduledCadenceExecutionResult[];
 };
 
+export type ManualBackupNowResult =
+  | {
+      scope: BackupCadence;
+      status: "executed";
+      executionMode: "lambda_cron";
+      createdEnvironmentId: string;
+      deletedEnvironmentId: string | null;
+      completedAt: string;
+      checkedAt: string;
+    }
+  | {
+      scope: BackupCadence;
+      status: "failed";
+      error: string;
+      checkedAt: string;
+    };
+
+export class CadenceNotEnabledError extends Error {
+  readonly cadence: BackupCadence;
+
+  constructor(cadence: BackupCadence) {
+    super(
+      `Backup cadence "${cadence}" is not enabled in the current plugin schedule.`,
+    );
+    this.name = "CadenceNotEnabledError";
+    this.cadence = cadence;
+  }
+}
+
 const BACKUP_CADENCES: BackupCadence[] = [
   "daily",
   "weekly",
@@ -1077,6 +1106,52 @@ export const runScheduledBackups = async (
     checkedAt,
     skipped: false,
     results,
+  };
+};
+
+type ManualBackupNowOptions = BackupExecutionOptions & {
+  scope: BackupCadence;
+  providerHint?: SchedulerProvider;
+};
+
+export const runManualBackupNow = async (
+  options: ManualBackupNowOptions,
+): Promise<ManualBackupNowResult> => {
+  const now = options.now ?? new Date();
+  const context = await getBackupContext(options);
+  const { scope } = options;
+
+  if (!context.scheduleConfig.enabledCadences.includes(scope)) {
+    throw new CadenceNotEnabledError(scope);
+  }
+
+  const [result] = await executeCadencesAndPersistState({
+    context,
+    cadences: [scope],
+    now,
+  });
+  const checkedAt = new Date().toISOString();
+
+  if (!result || result.status === "failed") {
+    return {
+      scope,
+      status: "failed",
+      checkedAt,
+      error:
+        result?.status === "failed"
+          ? result.error
+          : "Backup execution did not produce a result.",
+    };
+  }
+
+  return {
+    scope,
+    status: "executed",
+    executionMode: "lambda_cron",
+    createdEnvironmentId: result.result.createdEnvironmentId,
+    deletedEnvironmentId: result.result.deletedEnvironmentId,
+    completedAt: checkedAt,
+    checkedAt,
   };
 };
 

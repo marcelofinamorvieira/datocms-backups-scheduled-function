@@ -9,6 +9,10 @@
       "destination": "/api/datocms/backup-status"
     },
     {
+      "source": "/.netlify/functions/backup-now",
+      "destination": "/api/datocms/backup-now"
+    },
+    {
       "source": "/.netlify/functions/scheduledBackups",
       "destination": "/api/jobs/scheduled-backups"
     }

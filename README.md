@@ -19,21 +19,18 @@ This repository is now **lambda-full only** with a **single scheduled cron flow*
   - latest backup timestamp
   - next due timestamp
 
-### 3) Scheduled backups job
+### 3) Backup now (on-demand)
+
+- `POST /api/datocms/backup-now`
+- Authenticated per-slot manual trigger (`daily`, `weekly`, `biweekly`, `monthly`).
+- Creates the selected backup slot immediately and updates schedule state so that cadence counts as run for the current local day.
+
+### 4) Scheduled backups job
 
 - `POST /api/jobs/scheduled-backups`
 - Authenticated cron-triggered aggregate job.
 - Executes all due cadences from plugin schedule configuration.
 - Returns `500` with `SCHEDULED_BACKUPS_PARTIAL_FAILURE` if any cadence fails.
-
-## Intentionally removed
-
-The codebase no longer supports:
-
-- lambdaless runtime mode
-- manual backup triggers (`backup-now`)
-- scheduler disconnect endpoint
-- legacy per-scope backup job endpoints (`daily-backup`, `weekly-backup`, `initialize`)
 
 ## Environment variables
 
@@ -62,6 +59,7 @@ Quick deploy links:
 - `netlify/functions/scheduledBackups.ts`
 - `netlify/functions/plugin-health.ts`
 - `netlify/functions/backup-status.ts`
+- `netlify/functions/backup-now.ts`
 - routing in `netlify.toml`
 
 ### Vercel
@@ -76,6 +74,7 @@ Quick deploy links:
 - supports:
   - `POST /api/datocms/plugin-health`
   - `POST /api/datocms/backup-status`
+  - `POST /api/datocms/backup-now`
   - `POST /api/jobs/scheduled-backups`
 - scheduled hook also runs the unified job at `5 2 * * *`
 

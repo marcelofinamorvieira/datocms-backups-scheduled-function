@@ -5,6 +5,7 @@ import {
 } from "../services/backupService";
 import pluginHealthHandler from "../api/datocms/plugin-health";
 import backupStatusHandler from "../api/datocms/backup-status";
+import backupNowHandler from "../api/datocms/backup-now";
 import {
   buildErrorEnvelope,
   buildJsonResponse,
@@ -86,6 +87,28 @@ const validateCloudflareRequestAuth = (
 const resolveApiTokenFromBindings = (env: CloudflareBindings) =>
   env.DATOCMS_FULLACCESS_API_TOKEN;
 
+const withCloudflareRuntimeProvider = (rawBody: unknown): unknown => {
+  if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) {
+    return rawBody;
+  }
+
+  const runtimeCandidate = (rawBody as { runtime?: unknown }).runtime;
+  const existingRuntime =
+    typeof runtimeCandidate === "object" &&
+    runtimeCandidate &&
+    !Array.isArray(runtimeCandidate)
+      ? ((runtimeCandidate as Record<string, unknown>) ?? {})
+      : {};
+
+  return {
+    ...rawBody,
+    runtime: {
+      ...existingRuntime,
+      provider: "cloudflare",
+    },
+  };
+};
+
 type CloudflareWorkerDependencies = {
   runScheduled: (options: {
     apiToken?: string;
@@ -123,22 +146,23 @@ const createCloudflareWorker = (
 
       if (pathname === "/api/datocms/backup-status") {
         const rawBody = await parseRequestBody(request);
-        const body =
-          rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)
-            ? {
-                ...rawBody,
-                runtime: {
-                  ...(typeof (rawBody as { runtime?: unknown }).runtime === "object" &&
-                  (rawBody as { runtime?: unknown }).runtime &&
-                  !Array.isArray((rawBody as { runtime?: unknown }).runtime)
-                    ? ((rawBody as { runtime: Record<string, unknown> }).runtime ?? {})
-                    : {}),
-                  provider: "cloudflare",
-                },
-              }
-            : rawBody;
+        const body = withCloudflareRuntimeProvider(rawBody);
 
         const response = await invokeHandler(backupStatusHandler, {
+          method: request.method,
+          body,
+          headers: requestHeaders,
+          internalBackupsSharedSecret: env.DATOCMS_BACKUPS_SHARED_SECRET,
+          internalDatocmsApiToken: bindingApiToken,
+        });
+        return buildResponseFromCapturedPayload(response);
+      }
+
+      if (pathname === "/api/datocms/backup-now") {
+        const rawBody = await parseRequestBody(request);
+        const body = withCloudflareRuntimeProvider(rawBody);
+
+        const response = await invokeHandler(backupNowHandler, {
           method: request.method,
           body,
           headers: requestHeaders,

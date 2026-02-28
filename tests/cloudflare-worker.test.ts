@@ -5,6 +5,8 @@ import {
   DAILY_CRON_SCHEDULE,
 } from "../cloudflare/worker";
 import {
+  BACKUPS_BACKUP_NOW_EVENT_TYPE,
+  BACKUPS_MPI_BACKUP_NOW_REQUEST_MESSAGE,
   BACKUPS_MPI_STATUS_REQUEST_MESSAGE,
   BACKUPS_MPI_PING_MESSAGE,
   BACKUPS_MPI_VERSION,
@@ -217,4 +219,59 @@ test("cloudflare worker exposes backup-status route", async () => {
     assert.equal(payload.ok, false);
     assert.equal(payload.error.code, "MISSING_API_TOKEN");
   });
+});
+
+test("cloudflare worker exposes backup-now route and injects runtime provider", async () => {
+  let capturedInternalApiToken: string | undefined;
+  let capturedRuntimeProvider: string | undefined;
+
+  const worker = createCloudflareWorker({
+    invokeHandler: async (_handler, request) => {
+      capturedInternalApiToken = request.internalDatocmsApiToken;
+      const body =
+        request.body && typeof request.body === "object" && !Array.isArray(request.body)
+          ? (request.body as { runtime?: { provider?: string } })
+          : undefined;
+      capturedRuntimeProvider = body?.runtime?.provider;
+      return {
+        statusCode: 200,
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({ ok: true }),
+      };
+    },
+  });
+
+  const response = await worker.fetch(
+    new Request("https://example.com/api/datocms/backup-now", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Datocms-Backups-Auth": SHARED_SECRET,
+      },
+      body: JSON.stringify({
+        event_type: BACKUPS_BACKUP_NOW_EVENT_TYPE,
+        mpi: {
+          message: BACKUPS_MPI_BACKUP_NOW_REQUEST_MESSAGE,
+          version: BACKUPS_MPI_VERSION,
+        },
+        plugin: {
+          name: BACKUPS_PLUGIN_NAME,
+          environment: "main",
+        },
+        slot: {
+          scope: "daily",
+        },
+      }),
+    }),
+    {
+      DATOCMS_BACKUPS_SHARED_SECRET: SHARED_SECRET,
+      DATOCMS_FULLACCESS_API_TOKEN: "cloudflare-bound-token",
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedInternalApiToken, "cloudflare-bound-token");
+  assert.equal(capturedRuntimeProvider, "cloudflare");
 });

@@ -12,6 +12,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/datocms/backup-now"
+  to = "/.netlify/functions/backup-now"
+  status = 200
+
+[[redirects]]
   from = "/api/jobs/scheduled-backups"
   to = "/.netlify/functions/scheduledBackups"
   status = 200
