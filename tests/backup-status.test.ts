@@ -12,6 +12,11 @@ import {
   BACKUPS_STATUS_EVENT_TYPE,
 } from "../utils/healthContract";
 
+process.env.DATOCMS_BACKUPS_SHARED_SECRET = "test-shared-secret";
+const withAuthHeaders = () => ({
+  "x-datocms-backups-auth": "test-shared-secret",
+});
+
 const createValidRequestBody = () => ({
   event_type: BACKUPS_STATUS_EVENT_TYPE,
   mpi: {
@@ -50,6 +55,7 @@ test("backup status returns deterministic payload for valid request", async () =
   const response = await invokeVercelStyleHandler(handler, {
     method: "POST",
     body: createValidRequestBody(),
+    headers: withAuthHeaders(),
   });
 
   assert.equal(response.statusCode, 200);
@@ -63,6 +69,44 @@ test("backup status returns deterministic payload for valid request", async () =
   assert.equal(payload.status, BACKUPS_SERVICE_STATUS);
   assert.equal(payload.scheduler.provider, "vercel");
   assert.equal(payload.slots.daily.executionMode, "lambda_cron");
+});
+
+test("backup status forwards internal api token hint to service loader", async () => {
+  let receivedApiToken: string | undefined;
+  const handler = createBackupStatusHandler(async (options) => {
+    receivedApiToken = options?.apiToken;
+    return {
+      scheduler: {
+        provider: "cloudflare",
+        cadence: "daily",
+      },
+      slots: {
+        daily: {
+          scope: "daily",
+          executionMode: "lambda_cron",
+          lastBackupAt: null,
+          nextBackupAt: null,
+        },
+        weekly: {
+          scope: "weekly",
+          executionMode: "lambda_cron",
+          lastBackupAt: null,
+          nextBackupAt: null,
+        },
+      },
+      checkedAt: "2026-02-27T12:00:00.000Z",
+    };
+  });
+
+  const response = await invokeVercelStyleHandler(handler, {
+    method: "POST",
+    body: createValidRequestBody(),
+    headers: withAuthHeaders(),
+    internalDatocmsApiToken: "cloudflare-bound-token",
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(receivedApiToken, "cloudflare-bound-token");
 });
 
 test("backup status rejects unsupported methods", async () => {
@@ -95,6 +139,7 @@ test("backup status rejects non-compliant payloads", async () => {
         environment: "main",
       },
     },
+    headers: withAuthHeaders(),
   });
 
   assert.equal(response.statusCode, 400);

@@ -2,11 +2,6 @@
   directory = "netlify/functions"
 
 [[redirects]]
-  from = "/api/datocms/backup-now"
-  to = "/.netlify/functions/backup-now"
-  status = 200
-
-[[redirects]]
   from = "/api/datocms/plugin-health"
   to = "/.netlify/functions/plugin-health"
   status = 200
@@ -17,15 +12,10 @@
   status = 200
 
 [[redirects]]
-  from = "/api/datocms/scheduler-disconnect"
-  to = "/.netlify/functions/scheduler-disconnect"
-  status = 200
-
-[[redirects]]
   from = "/api/jobs/scheduled-backups"
   to = "/.netlify/functions/scheduledBackups"
   status = 200
 
 [template.environment]
   DATOCMS_FULLACCESS_API_TOKEN = "Input your DatoCMS project Full Access Token"
-  DATOCMS_FULLACCESS_TOKEN = "Legacy fallback token variable (optional)"
+  DATOCMS_BACKUPS_SHARED_SECRET = "Shared secret used by X-Datocms-Backups-Auth header"

@@ -29,6 +29,7 @@ export const handler = async (
     return await invokeVercelStyleHandler(pluginHealthHandler, {
       method: event.httpMethod ?? "GET",
       body,
+      headers: event.headers as Record<string, string> | undefined,
     });
   } catch {
     return buildJsonResponse(

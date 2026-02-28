@@ -14,12 +14,14 @@ import {
   BACKUPS_SERVICE_STATUS,
   BACKUPS_STATUS_EVENT_TYPE,
 } from "../../utils/healthContract";
-
-type ValidationError = {
-  code: string;
-  message: string;
-  details: Record<string, unknown>;
-};
+import {
+  handleOptionsRequest,
+  parseJsonObjectBody,
+  sendError,
+  type ValidationError,
+  setCorsHeaders,
+} from "../../utils/httpHandlers";
+import { validateBackupsSharedSecret } from "../../utils/requestAuth";
 
 type BackupStatusRequestPayload = {
   event_type?: unknown;
@@ -34,51 +36,6 @@ type BackupStatusRequestPayload = {
   runtime?: {
     provider?: unknown;
   };
-};
-
-const setCorsHeaders = (res: VercelResponse) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "OPTIONS,POST");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version",
-  );
-};
-
-const sendError = (
-  res: VercelResponse,
-  statusCode: number,
-  error: ValidationError,
-) => {
-  res.status(statusCode).json({
-    ok: false,
-    error,
-  });
-};
-
-const parseBody = (body: unknown): BackupStatusRequestPayload => {
-  if (typeof body === "string") {
-    try {
-      const parsed = JSON.parse(body) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("invalid-body");
-      }
-
-      return parsed as BackupStatusRequestPayload;
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new SyntaxError("INVALID_JSON");
-      }
-
-      throw new Error("INVALID_BODY");
-    }
-  }
-
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new Error("INVALID_BODY");
-  }
-
-  return body as BackupStatusRequestPayload;
 };
 
 const toProvider = (value: unknown): SchedulerProvider | undefined => {
@@ -173,15 +130,15 @@ const validatePayload = (
 };
 
 export const createBackupStatusHandler = (
-  loadStatus: (options: {
+  loadStatus: (options?: {
     providerHint?: SchedulerProvider;
+    apiToken?: string;
   }) => Promise<BackupStatusResult> = (options) => getBackupStatus(options),
 ) => {
   return async (req: VercelRequest, res: VercelResponse) => {
-    setCorsHeaders(res);
+    setCorsHeaders(res, "OPTIONS,POST");
 
-    if (req.method === "OPTIONS") {
-      res.status(204).end();
+    if (handleOptionsRequest(req, res, 204)) {
       return;
     }
 
@@ -197,7 +154,23 @@ export const createBackupStatusHandler = (
     }
 
     try {
-      const parsedBody = parseBody(req.body);
+      const authResult = validateBackupsSharedSecret({
+        headers: req.headers as Record<string, unknown> | undefined,
+        sharedSecret:
+          typeof req.internalBackupsSharedSecret === "string"
+            ? req.internalBackupsSharedSecret
+            : undefined,
+      });
+      if (!authResult.ok) {
+        sendError(res, authResult.failure.statusCode, {
+          code: authResult.failure.code,
+          message: authResult.failure.message,
+          details: {},
+        });
+        return;
+      }
+
+      const parsedBody = parseJsonObjectBody(req.body) as BackupStatusRequestPayload;
       const validationError = validatePayload(parsedBody);
       if (validationError) {
         sendError(res, 400, validationError);
@@ -205,7 +178,13 @@ export const createBackupStatusHandler = (
       }
 
       const providerHint = toProvider(parsedBody.runtime?.provider);
-      const status = await loadStatus({ providerHint });
+      const status = await loadStatus({
+        providerHint,
+        apiToken:
+          typeof req.internalDatocmsApiToken === "string"
+            ? req.internalDatocmsApiToken
+            : undefined,
+      });
 
       res.status(200).json({
         ok: true,
@@ -242,8 +221,7 @@ export const createBackupStatusHandler = (
       if (error instanceof MissingApiTokenError) {
         sendError(res, 500, {
           code: "MISSING_API_TOKEN",
-          message:
-            "Missing API token. Configure DATOCMS_FULLACCESS_API_TOKEN (or legacy DATOCMS_FULLACCESS_TOKEN).",
+          message: "Missing API token. Configure DATOCMS_FULLACCESS_API_TOKEN.",
           details: {},
         });
         return;

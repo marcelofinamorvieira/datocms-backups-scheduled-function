@@ -9,35 +9,17 @@ import {
   BACKUPS_SERVICE_STATUS,
   PLUGIN_HEALTH_EVENT_TYPE,
 } from "../../utils/healthContract";
+import {
+  handleOptionsRequest,
+  parseJsonObjectBody,
+  sendError,
+  type ValidationError,
+  setCorsHeaders,
+} from "../../utils/httpHandlers";
+import { validateBackupsSharedSecret } from "../../utils/requestAuth";
 
 const VALID_MPI_PHASES_MESSAGE =
   "mpi.phase must be finish_installation, config_mount, or config_connect";
-
-type ValidationError = {
-  code: string;
-  message: string;
-  details: Record<string, unknown>;
-};
-
-const setCorsHeaders = (res: VercelResponse) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,POST");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version",
-  );
-};
-
-const sendError = (
-  res: VercelResponse,
-  statusCode: number,
-  error: ValidationError,
-) => {
-  res.status(statusCode).json({
-    ok: false,
-    error,
-  });
-};
 
 type PluginHealthRequest = {
   event_type?: unknown;
@@ -50,29 +32,6 @@ type PluginHealthRequest = {
     name?: unknown;
     environment?: unknown;
   };
-};
-
-const parseBody = (body: unknown): PluginHealthRequest => {
-  if (typeof body === "string") {
-    try {
-      const parsedBody = JSON.parse(body) as unknown;
-      if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
-        throw new Error("invalid-body");
-      }
-      return parsedBody as PluginHealthRequest;
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new SyntaxError("INVALID_JSON");
-      }
-      throw new Error("INVALID_BODY");
-    }
-  }
-
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new Error("INVALID_BODY");
-  }
-
-  return body as PluginHealthRequest;
 };
 
 const validatePayload = (payload: PluginHealthRequest): ValidationError | null => {
@@ -153,10 +112,9 @@ export default async function pluginHealthHandler(
   req: VercelRequest,
   res: VercelResponse,
 ) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, "GET,OPTIONS,POST");
 
-  if (req.method === "OPTIONS") {
-    res.status(204).end();
+  if (handleOptionsRequest(req, res, 204)) {
     return;
   }
 
@@ -172,7 +130,23 @@ export default async function pluginHealthHandler(
   }
 
   try {
-    const parsedBody = parseBody(req.body);
+    const authResult = validateBackupsSharedSecret({
+      headers: req.headers as Record<string, unknown> | undefined,
+      sharedSecret:
+        typeof req.internalBackupsSharedSecret === "string"
+          ? req.internalBackupsSharedSecret
+          : undefined,
+    });
+    if (!authResult.ok) {
+      sendError(res, authResult.failure.statusCode, {
+        code: authResult.failure.code,
+        message: authResult.failure.message,
+        details: {},
+      });
+      return;
+    }
+
+    const parsedBody = parseJsonObjectBody(req.body) as PluginHealthRequest;
     const validationError = validatePayload(parsedBody);
     if (validationError) {
       sendError(res, 400, validationError);

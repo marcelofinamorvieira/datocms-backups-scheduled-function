@@ -1,6 +1,11 @@
 export type VercelRequest = {
   method?: string;
   body: any;
+  headers?: Record<string, unknown>;
+  query?: Record<string, unknown>;
+  url?: string;
+  internalBackupsSharedSecret?: string;
+  internalDatocmsApiToken?: string;
   [key: string]: any;
 };
 

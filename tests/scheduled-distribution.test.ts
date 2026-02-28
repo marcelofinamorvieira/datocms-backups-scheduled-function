@@ -124,7 +124,6 @@ test("schedule normalization falls back to daily+weekly and valid timezone", () 
       version: 99,
       enabledCadences: [],
       timezone: "Invalid/Zone",
-      lambdalessTime: "99:99",
     },
     timezoneFallback: "America/New_York",
     now: new Date("2026-02-27T10:00:00.000Z"),
@@ -133,7 +132,6 @@ test("schedule normalization falls back to daily+weekly and valid timezone", () 
   assert.equal(normalized.config.version, 1);
   assert.deepEqual(normalized.config.enabledCadences, ["daily", "weekly"]);
   assert.equal(normalized.config.timezone, "America/New_York");
-  assert.equal(normalized.config.lambdalessTime, "00:00");
   assert.equal(normalized.requiresMigration, true);
 });
 

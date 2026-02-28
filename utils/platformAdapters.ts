@@ -15,7 +15,7 @@ export const DEFAULT_CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,OPTIONS,POST",
   "Access-Control-Allow-Headers":
-    "Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version",
+    "Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, X-Datocms-Backups-Auth",
 };
 
 export const buildErrorEnvelope = (code: string, message: string) => {
@@ -119,6 +119,8 @@ export const invokeVercelStyleHandler = async (
     headers?: Record<string, string>;
     query?: Record<string, unknown>;
     url?: string;
+    internalBackupsSharedSecret?: string;
+    internalDatocmsApiToken?: string;
   },
 ): Promise<CapturedHandlerResponse> => {
   let statusCode = 200;
@@ -154,6 +156,8 @@ export const invokeVercelStyleHandler = async (
       headers: request.headers,
       query: request.query,
       url: request.url,
+      internalBackupsSharedSecret: request.internalBackupsSharedSecret,
+      internalDatocmsApiToken: request.internalDatocmsApiToken,
     } as VercelRequest,
     response,
   );

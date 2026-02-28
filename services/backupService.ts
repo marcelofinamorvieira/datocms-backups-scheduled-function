@@ -2,19 +2,15 @@ import { buildClient } from "@datocms/cma-client-node";
 import { BACKUPS_PLUGIN_NAME } from "../utils/healthContract";
 
 export const API_TOKEN_ENV_VAR = "DATOCMS_FULLACCESS_API_TOKEN";
-export const LEGACY_API_TOKEN_ENV_VAR = "DATOCMS_FULLACCESS_TOKEN";
 
 export class MissingApiTokenError extends Error {
   constructor() {
-    super(
-      `Missing API token. Set ${API_TOKEN_ENV_VAR} (preferred) or ${LEGACY_API_TOKEN_ENV_VAR}.`,
-    );
+    super(`Missing API token. Set ${API_TOKEN_ENV_VAR}.`);
     this.name = "MissingApiTokenError";
   }
 }
 
 export type BackupCadence = "daily" | "weekly" | "biweekly" | "monthly";
-export type BackupScope = "daily" | "weekly";
 
 export type ScopedBackupResult = {
   scope: BackupCadence;
@@ -22,33 +18,14 @@ export type ScopedBackupResult = {
   deletedEnvironmentId: string | null;
 };
 
-export type InitializationResult = {
-  daily: ScopedBackupResult;
-  weekly: ScopedBackupResult;
-};
-
 type BackupExecutionOptions = {
   apiToken?: string;
   now?: Date;
 };
 
-export type ScheduledCadence = "daily";
-
 export type SchedulerProvider = "vercel" | "netlify" | "cloudflare" | "unknown";
 
-export type ScheduledSkipReason = "NOT_DUE" | "SCHEDULER_DISABLED";
-
-export type ScheduledScopedBackupResult =
-  | {
-      scope: BackupScope;
-      status: "executed";
-      result: ScopedBackupResult;
-    }
-  | {
-      scope: BackupScope;
-      status: "skipped";
-      reason: ScheduledSkipReason;
-    };
+export type ScheduledSkipReason = "NOT_DUE";
 
 export type BackupStatusSlot = {
   scope: BackupCadence;
@@ -107,17 +84,8 @@ const BACKUP_CADENCES: BackupCadence[] = [
 ];
 const DEFAULT_ENABLED_CADENCES: BackupCadence[] = ["daily", "weekly"];
 const DEFAULT_TIMEZONE = "UTC";
-const DEFAULT_LAMBDALESS_TIME = "00:00";
 const BACKUP_SCHEDULE_VERSION = 1 as const;
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
-
-export class AutomaticBackupsPluginNotFoundError extends Error {
-  constructor() {
-    super("Could not locate the Automatic Environment Backups plugin instance.");
-    this.name = "AutomaticBackupsPluginNotFoundError";
-  }
-}
 
 type LocalDateParts = {
   year: number;
@@ -136,7 +104,6 @@ type BackupScheduleConfig = {
   version: 1;
   enabledCadences: BackupCadence[];
   timezone: string;
-  lambdalessTime: string;
   anchorLocalDate: string;
   updatedAt: string;
 };
@@ -145,7 +112,7 @@ type AutomaticBackupsScheduleState = {
   lastRunLocalDateByCadence?: Partial<Record<BackupCadence, string>>;
   lastRunAtByCadence?: Partial<Record<BackupCadence, string>>;
   lastManagedEnvironmentIdByCadence?: Partial<Record<BackupCadence, string>>;
-  lastExecutionModeByCadence?: Partial<Record<BackupCadence, "lambda_cron" | "lambda_manual">>;
+  lastExecutionModeByCadence?: Partial<Record<BackupCadence, "lambda_cron">>;
   lastErrorByCadence?: Partial<Record<BackupCadence, string>>;
   dailyLastRunDate?: string;
   weeklyLastRunKey?: string;
@@ -153,8 +120,8 @@ type AutomaticBackupsScheduleState = {
   lastWeeklyRunAt?: string;
   lastDailyManagedEnvironmentId?: string;
   lastWeeklyManagedEnvironmentId?: string;
-  lastDailyExecutionMode?: "lambda_cron" | "lambda_manual";
-  lastWeeklyExecutionMode?: "lambda_cron" | "lambda_manual";
+  lastDailyExecutionMode?: "lambda_cron";
+  lastWeeklyExecutionMode?: "lambda_cron";
   lastDailyError?: string;
   lastWeeklyError?: string;
 };
@@ -166,7 +133,6 @@ type BackupContext = {
   pluginParameters: Record<string, unknown>;
   scheduleConfig: BackupScheduleConfig;
   scheduleState: AutomaticBackupsScheduleState;
-  schedulerEnabled: boolean;
 };
 
 const getProcessEnv = (): NodeJS.ProcessEnv | undefined => {
@@ -179,10 +145,7 @@ const getProcessEnv = (): NodeJS.ProcessEnv | undefined => {
 
 export const resolveApiToken = (apiToken?: string): string => {
   const processEnv = getProcessEnv();
-  const token =
-    apiToken ||
-    processEnv?.[API_TOKEN_ENV_VAR] ||
-    processEnv?.[LEGACY_API_TOKEN_ENV_VAR];
+  const token = apiToken || processEnv?.[API_TOKEN_ENV_VAR];
 
   if (!token) {
     throw new MissingApiTokenError();
@@ -198,9 +161,6 @@ export const assignApiTokenToProcessEnv = (apiToken: string) => {
   }
 
   processEnv[API_TOKEN_ENV_VAR] = apiToken;
-  if (!processEnv[LEGACY_API_TOKEN_ENV_VAR]) {
-    processEnv[LEGACY_API_TOKEN_ENV_VAR] = apiToken;
-  }
 };
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -419,7 +379,6 @@ const normalizeBackupScheduleConfig = ({
         version: BACKUP_SCHEDULE_VERSION,
         enabledCadences: [...DEFAULT_ENABLED_CADENCES],
         timezone: fallbackTimezone,
-        lambdalessTime: DEFAULT_LAMBDALESS_TIME,
         anchorLocalDate: fallbackAnchor,
         updatedAt: fallbackUpdatedAt,
       },
@@ -433,17 +392,11 @@ const normalizeBackupScheduleConfig = ({
     parseLocalDateKey(value.anchorLocalDate.trim())
       ? value.anchorLocalDate.trim()
       : toLocalDateKey(now, timezone);
-  const lambdalessTime =
-    typeof value.lambdalessTime === "string" &&
-    TIME_PATTERN.test(value.lambdalessTime.trim())
-      ? value.lambdalessTime.trim()
-      : DEFAULT_LAMBDALESS_TIME;
 
   const config: BackupScheduleConfig = {
     version: BACKUP_SCHEDULE_VERSION,
     enabledCadences: normalizeCadences(value.enabledCadences),
     timezone,
-    lambdalessTime,
     anchorLocalDate,
     updatedAt:
       typeof value.updatedAt === "string" && value.updatedAt.trim()
@@ -460,9 +413,6 @@ const normalizeBackupScheduleConfig = ({
     !Array.isArray(value.enabledCadences) ||
     normalizeCadences(value.enabledCadences).length === 0 ||
     !rawTimezone ||
-    !TIME_PATTERN.test(
-      typeof value.lambdalessTime === "string" ? value.lambdalessTime.trim() : "",
-    ) ||
     !parseLocalDateKey(rawAnchor) ||
     !rawUpdatedAt;
 
@@ -496,6 +446,27 @@ const toCadenceMap = (
   return Object.keys(mapped).length > 0 ? mapped : undefined;
 };
 
+const toExecutionModeCadenceMap = (
+  value: unknown,
+): Partial<Record<BackupCadence, "lambda_cron">> | undefined => {
+  if (!isObject(value)) {
+    return undefined;
+  }
+
+  const mapped: Partial<Record<BackupCadence, "lambda_cron">> = {};
+  for (const [key, rawValue] of Object.entries(value)) {
+    if (!isBackupCadence(key)) {
+      continue;
+    }
+
+    if (rawValue === "lambda_cron") {
+      mapped[key] = rawValue;
+    }
+  }
+
+  return Object.keys(mapped).length > 0 ? mapped : undefined;
+};
+
 const toScheduleState = (value: unknown): AutomaticBackupsScheduleState => {
   if (!isObject(value)) {
     return {};
@@ -508,9 +479,9 @@ const toScheduleState = (value: unknown): AutomaticBackupsScheduleState => {
     lastManagedEnvironmentIdByCadence: toCadenceMap(
       value.lastManagedEnvironmentIdByCadence,
     ),
-    lastExecutionModeByCadence: toCadenceMap(
+    lastExecutionModeByCadence: toExecutionModeCadenceMap(
       value.lastExecutionModeByCadence,
-    ) as AutomaticBackupsScheduleState["lastExecutionModeByCadence"],
+    ),
     lastErrorByCadence: toCadenceMap(value.lastErrorByCadence),
     dailyLastRunDate: toOptionalString(value.dailyLastRunDate),
     weeklyLastRunKey: toOptionalString(value.weeklyLastRunKey),
@@ -519,13 +490,11 @@ const toScheduleState = (value: unknown): AutomaticBackupsScheduleState => {
     lastDailyManagedEnvironmentId: toOptionalString(value.lastDailyManagedEnvironmentId),
     lastWeeklyManagedEnvironmentId: toOptionalString(value.lastWeeklyManagedEnvironmentId),
     lastDailyExecutionMode:
-      value.lastDailyExecutionMode === "lambda_cron" ||
-      value.lastDailyExecutionMode === "lambda_manual"
+      value.lastDailyExecutionMode === "lambda_cron"
         ? value.lastDailyExecutionMode
         : undefined,
     lastWeeklyExecutionMode:
-      value.lastWeeklyExecutionMode === "lambda_cron" ||
-      value.lastWeeklyExecutionMode === "lambda_manual"
+      value.lastWeeklyExecutionMode === "lambda_cron"
         ? value.lastWeeklyExecutionMode
         : undefined,
     lastDailyError: toOptionalString(value.lastDailyError),
@@ -751,35 +720,6 @@ const getEnvironmentPrefix = (scope: BackupCadence) => {
 
 const getDateSuffix = (now: Date) => now.toISOString().split("T")[0];
 
-const getConfiguredLambdaDeploymentUrl = (
-  parameters: Record<string, unknown>,
-): string | undefined => {
-  return (
-    toOptionalString(parameters.deploymentURL) ||
-    toOptionalString(parameters.netlifyURL) ||
-    toOptionalString(parameters.vercelURL)
-  );
-};
-
-export const isLambdaSchedulerEnabledFromPluginParameters = (
-  parameters: unknown,
-): boolean => {
-  if (!isObject(parameters)) {
-    return false;
-  }
-
-  const configuredLambdaUrl = getConfiguredLambdaDeploymentUrl(parameters);
-  if (!configuredLambdaUrl) {
-    return false;
-  }
-
-  if (parameters.runtimeMode === "lambdaless") {
-    return false;
-  }
-
-  return true;
-};
-
 const resolveSchedulerProvider = (
   providerHint?: SchedulerProvider,
 ): SchedulerProvider => {
@@ -862,7 +802,6 @@ const getBackupContext = async (
       pluginParameters: {},
       scheduleConfig: normalized.config,
       scheduleState: {},
-      schedulerEnabled: true,
     };
   }
 
@@ -893,7 +832,6 @@ const getBackupContext = async (
     pluginParameters: updatedParameters,
     scheduleConfig: normalized.config,
     scheduleState: toScheduleState(updatedParameters.automaticBackupsSchedule),
-    schedulerEnabled: isLambdaSchedulerEnabledFromPluginParameters(updatedParameters),
   };
 };
 
@@ -945,6 +883,8 @@ const executeScopedBackup = async (
       !environment.meta.primary && environment.id.startsWith(`${prefix}-`),
   );
 
+  // Intentional order: delete before fork to avoid temporary double-backup overlap
+  // that can push clients into environment overages during rotation windows.
   for (const previousBackup of previousBackups) {
     await client.environments.destroy(previousBackup.id);
   }
@@ -965,12 +905,10 @@ const executeCadencesAndPersistState = async ({
   context,
   cadences,
   now,
-  executionMode,
 }: {
   context: BackupContext;
   cadences: BackupCadence[];
   now: Date;
-  executionMode: "lambda_cron" | "lambda_manual";
 }): Promise<ScheduledCadenceExecutionResult[]> => {
   const currentLocalDate = toLocalDateKey(now, context.scheduleConfig.timezone);
   const scheduleState = context.scheduleState;
@@ -983,9 +921,7 @@ const executeCadencesAndPersistState = async ({
   const managedEnvironmentIdByCadence: Partial<Record<BackupCadence, string>> = {
     ...(scheduleState.lastManagedEnvironmentIdByCadence ?? {}),
   };
-  const executionModeByCadence: Partial<
-    Record<BackupCadence, "lambda_cron" | "lambda_manual">
-  > = {
+  const executionModeByCadence: Partial<Record<BackupCadence, "lambda_cron">> = {
     ...(scheduleState.lastExecutionModeByCadence ?? {}),
   };
   const errorByCadence: Partial<Record<BackupCadence, string>> = {
@@ -1005,7 +941,7 @@ const executeCadencesAndPersistState = async ({
       runLocalDateByCadence[cadence] = currentLocalDate;
       runAtByCadence[cadence] = completedAt;
       managedEnvironmentIdByCadence[cadence] = result.createdEnvironmentId;
-      executionModeByCadence[cadence] = executionMode;
+      executionModeByCadence[cadence] = "lambda_cron";
       delete errorByCadence[cadence];
 
       results.push({
@@ -1089,91 +1025,10 @@ const getDueCadences = ({
   });
 };
 
-export const getAutomaticBackupsSchedulerState = async (
-  options: BackupExecutionOptions = {},
-): Promise<{ enabled: boolean; checkedAt: string; pluginId: string | null }> => {
-  const apiToken = resolveApiToken(options.apiToken);
-  assignApiTokenToProcessEnv(apiToken);
-
-  const plugin = await findAutomaticBackupsPlugin(apiToken);
-  if (!plugin) {
-    return {
-      enabled: false,
-      checkedAt: new Date().toISOString(),
-      pluginId: null,
-    };
-  }
-
-  return {
-    enabled: isLambdaSchedulerEnabledFromPluginParameters(plugin.parameters),
-    checkedAt: new Date().toISOString(),
-    pluginId: plugin.id,
-  };
-};
-
-export const disableAutomaticBackupsScheduler = async (
-  options: BackupExecutionOptions = {},
-): Promise<{ enabled: false; disabledAt: string; pluginId: string }> => {
-  const apiToken = resolveApiToken(options.apiToken);
-  assignApiTokenToProcessEnv(apiToken);
-
-  const plugin = await findAutomaticBackupsPlugin(apiToken);
-  if (!plugin) {
-    throw new AutomaticBackupsPluginNotFoundError();
-  }
-
-  const client = buildClient({ apiToken });
-  const nextParameters = {
-    ...(isObject(plugin.parameters) ? plugin.parameters : {}),
-    deploymentURL: "",
-    netlifyURL: "",
-    vercelURL: "",
-    lambdaConnection: null,
-    connectionValidationMode: null,
-  };
-  await client.plugins.update(plugin.id, {
-    parameters: nextParameters,
-  });
-
-  return {
-    enabled: false,
-    disabledAt: new Date().toISOString(),
-    pluginId: plugin.id,
-  };
-};
-
-export const runDailyBackup = async (
-  options: BackupExecutionOptions = {},
-): Promise<ScopedBackupResult> => {
-  return executeScopedBackup("daily", options);
-};
-
-export const runWeeklyBackup = async (
-  options: BackupExecutionOptions = {},
-): Promise<ScopedBackupResult> => {
-  return executeScopedBackup("weekly", options);
-};
-
-export const runScheduledDailyBackup = async (
-  options: BackupExecutionOptions = {},
-): Promise<ScheduledScopedBackupResult> => {
-  const result = await runDailyBackup(options);
-  return {
-    scope: "daily",
-    status: "executed",
-    result,
-  };
-};
-
-export const runScheduledWeeklyBackup = async (
-  options: BackupExecutionOptions = {},
-): Promise<ScheduledScopedBackupResult> => {
-  const result = await runWeeklyBackup(options);
-  return {
-    scope: "weekly",
-    status: "executed",
-    result,
-  };
+export const hasScheduledBackupFailures = (
+  result: ScheduledBackupsRunResult,
+): boolean => {
+  return result.results.some((entry) => entry.status === "failed");
 };
 
 export const runScheduledBackups = async (
@@ -1183,24 +1038,6 @@ export const runScheduledBackups = async (
   const provider = resolveSchedulerProvider(options.providerHint);
   const context = await getBackupContext(options);
   const checkedAt = new Date().toISOString();
-
-  if (context.pluginId && !context.schedulerEnabled) {
-    return {
-      scheduler: {
-        provider,
-        cadence: "daily",
-      },
-      schedule: {
-        timezone: context.scheduleConfig.timezone,
-        enabledCadences: context.scheduleConfig.enabledCadences,
-        anchorLocalDate: context.scheduleConfig.anchorLocalDate,
-      },
-      checkedAt,
-      skipped: true,
-      reason: "SCHEDULER_DISABLED",
-      results: [],
-    };
-  }
 
   const dueCadences = getDueCadences({ context, now });
   if (dueCadences.length === 0) {
@@ -1225,7 +1062,6 @@ export const runScheduledBackups = async (
     context,
     cadences: dueCadences,
     now,
-    executionMode: "lambda_cron",
   });
 
   return {
@@ -1241,50 +1077,6 @@ export const runScheduledBackups = async (
     checkedAt,
     skipped: false,
     results,
-  };
-};
-
-export const runBackupNow = async (
-  options: BackupExecutionOptions & { providerHint?: SchedulerProvider } = {},
-): Promise<ScheduledBackupsRunResult> => {
-  const now = options.now ?? new Date();
-  const provider = resolveSchedulerProvider(options.providerHint);
-  const context = await getBackupContext(options);
-  const checkedAt = new Date().toISOString();
-
-  const results = await executeCadencesAndPersistState({
-    context,
-    cadences: context.scheduleConfig.enabledCadences,
-    now,
-    executionMode: "lambda_manual",
-  });
-
-  return {
-    scheduler: {
-      provider,
-      cadence: "daily",
-    },
-    schedule: {
-      timezone: context.scheduleConfig.timezone,
-      enabledCadences: context.scheduleConfig.enabledCadences,
-      anchorLocalDate: context.scheduleConfig.anchorLocalDate,
-    },
-    checkedAt,
-    skipped: context.scheduleConfig.enabledCadences.length === 0,
-    reason: context.scheduleConfig.enabledCadences.length === 0 ? "NOT_DUE" : undefined,
-    results,
-  };
-};
-
-export const runInitialization = async (
-  options: BackupExecutionOptions = {},
-): Promise<InitializationResult> => {
-  const daily = await runDailyBackup(options);
-  const weekly = await runWeeklyBackup(options);
-
-  return {
-    daily,
-    weekly,
   };
 };
 

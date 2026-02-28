@@ -1,2 +1,9 @@
 # Local Netlify folder
 .netlify
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Keep a single lockfile at repository root
+netlify/functions/**/package-lock.json
